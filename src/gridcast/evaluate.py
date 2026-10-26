@@ -324,7 +324,7 @@ def run_backtest(
     combined = pd.concat(pieces).sort_index()
     combined["month"] = pd.DatetimeIndex(combined.index).month
     combined["hour"] = pd.DatetimeIndex(combined.index).hour
-    combined["dow"] = pd.DatetimeIndex(combined.index).dayofweek
+    combined["dow"] = pd.DatetimeIndex(combined.index).day_of_week
     return BacktestResult(
         alpha=alpha,
         model=model_name,

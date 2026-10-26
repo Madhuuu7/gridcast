@@ -188,9 +188,9 @@ def build_features(
     # distant.
     features["block_sin"] = np.sin(2 * np.pi * block / BLOCKS_PER_DAY)
     features["block_cos"] = np.cos(2 * np.pi * block / BLOCKS_PER_DAY)
-    features["dow"] = pd.DatetimeIndex(full).dayofweek
+    features["dow"] = pd.DatetimeIndex(full).day_of_week
     features["is_weekend"] = (features["dow"] >= 5).astype(int)
-    doy = pd.DatetimeIndex(full).dayofyear
+    doy = pd.DatetimeIndex(full).day_of_year
     features["doy_sin"] = np.sin(2 * np.pi * doy / 365.25)
     features["doy_cos"] = np.cos(2 * np.pi * doy / 365.25)
 
