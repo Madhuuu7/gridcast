@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gridcast</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #121820;
+    --panel-2: #18202b;
+    --line: #27313f;
+    --ink: #e8eef5;
+    --muted: #8da0b5;
+    --dim: #5c6e85;
+    --actual: #e8eef5;
+    --point: #4cc2ff;
+    --band: #4cc2ff;
+    --miss: #ff5c7a;
+    --good: #3fd17f;
+    --warn: #ffb648;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--sans); }
+  header {
+    border-bottom: 1px solid var(--line); padding: 18px 26px;
+    display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap;
+  }
+  header h1 { margin: 0; font: 600 20px/1 var(--mono); flex: none; }
+  header p { margin: 0; color: var(--muted); font-size: 13.5px; flex: 1 1 42ch; max-width: 94ch; }
+  main { padding: 22px 26px 64px; max-width: 1300px; }
+  section { margin-bottom: 26px; }
+  h2 {
+    font: 600 12px/1 var(--sans); letter-spacing: .09em; text-transform: uppercase;
+    color: var(--dim); margin: 0 0 11px;
+  }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 17px; }
+  .row { display: flex; gap: 14px; align-items: end; flex-wrap: wrap; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  select, input {
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 6px; padding: 8px 9px; font: 13px var(--mono); min-width: 180px;
+  }
+  button {
+    background: var(--point); color: #04121c; border: 0; border-radius: 6px;
+    padding: 9px 17px; font: 600 14px var(--sans); cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: progress; }
+  .stats { display: grid; gap: 13px; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
+  .stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .stat b { display: block; font: 600 18px/1.25 var(--mono); }
+  .stat span { font-size: 11.5px; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    text-align: left; font: 600 11px/1 var(--sans); letter-spacing: .06em;
+    text-transform: uppercase; color: var(--dim); padding: 0 9px 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  td { padding: 7px 9px; border-bottom: 1px solid rgba(39,49,63,.55); font-family: var(--mono); font-size: 12.5px; }
+  td.name { font-family: var(--sans); font-size: 13px; }
+  tr.best td { background: rgba(63,209,127,.08); }
+  tr.best td.name { color: var(--good); font-weight: 600; }
+  .num { text-align: right; }
+  .uneven { color: var(--miss); }
+  .withinnoise { color: var(--good); }
+  svg { width: 100%; height: auto; display: block; }
+  .ax { stroke: var(--line); }
+  .axlabel { fill: var(--dim); font: 10px var(--mono); }
+  .legend { display: flex; gap: 15px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); margin-top: 9px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .note { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; max-width: 80ch; }
+  .note code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+  .err { color: var(--miss); font-family: var(--mono); font-size: 13px; }
+  .pill { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 99px; padding: 2px 8px; }
+  .two { display: grid; gap: 15px; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>gridcast</h1>
+  <p>
+    Day-ahead load forecasting for the Delhi grid, on three years of real
+    5-minute SLDC readings. Every forecast is for all 96 fifteen-minute
+    scheduling blocks of the next day, issued at the 10:00 gate, and every
+    interval's coverage is measured rather than assumed.
+  </p>
+</header>
+
+<main>
+  <section>
+    <h2>A day</h2>
+    <div class="panel">
+      <div class="row">
+        <div>
+          <label for="day">Date (out-of-sample only)</label>
+          <select id="day"></select>
+        </div>
+        <div>
+          <label for="method">Interval method</label>
+          <select id="method"></select>
+        </div>
+        <div><button id="run">Forecast</button></div>
+        <div id="window" class="pill"></div>
+      </div>
+      <p class="note" id="windownote"></p>
+    </div>
+  </section>
+
+  <section id="statsection" hidden>
+    <h2>That day</h2>
+    <div class="stats" id="stats"></div>
+  </section>
+
+  <section id="chartsection" hidden>
+    <h2>Forecast against what happened</h2>
+    <div class="panel">
+      <div id="chart"></div>
+      <div class="legend" id="chartlegend"></div>
+      <p class="note" id="chartnote"></p>
+    </div>
+  </section>
+
+  <section id="daymethodsection" hidden>
+    <h2>Every method on this day</h2>
+    <div class="panel">
+      <table id="daymethods"></table>
+      <p class="note">
+        One day is 96 blocks, so a coverage figure here carries a standard
+        error of about 3 points even when nothing is wrong. The measured
+        numbers below come from 32,000 blocks across eight folds.
+      </p>
+    </div>
+  </section>
+
+  <section id="measuredsection" hidden>
+    <h2>Measured over the whole backtest</h2>
+    <div class="two">
+      <div class="panel">
+        <h2 style="margin-top:0">Marginal</h2>
+        <table id="marginal"></table>
+        <p class="note">
+          Winkler charges the width and penalises misses, so neither a very
+          wide nor a very sharp interval wins it by cheating. Lower is better.
+        </p>
+      </div>
+      <div class="panel">
+        <h2 style="margin-top:0">Conditional</h2>
+        <div class="row" style="margin-bottom:10px">
+          <div>
+            <label for="by">Grouped by</label>
+            <select id="by">
+              <option value="block">block of day</option>
+              <option value="month">month</option>
+              <option value="kind">kind of day</option>
+            </select>
+          </div>
+        </div>
+        <table id="conditional"></table>
+        <p class="note" id="conditionalnote"></p>
+      </div>
+    </div>
+  </section>
+
+  <section id="datasection" hidden>
+    <h2>The data</h2>
+    <div class="panel"><table id="datafacts"></table></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ * Pure helpers: everything that turns an API response into text or
+ * geometry, with no DOM. scripts/check_console.mjs runs these in a
+ * Node vm against canned and live payloads, because the numbers are
+ * the part worth testing and a browser is not needed to test them.
+ * ------------------------------------------------------------------ */
+
+const G = {};
+
+G.fmtMw = function (x) {
+  if (x === null || x === undefined || Number.isNaN(x)) return "--";
+  return Math.round(x).toLocaleString("en-IN");
+};
+
+G.fmtPct = function (x, digits) {
+  if (x === null || x === undefined || Number.isNaN(x)) return "--";
+  return (x * 100).toFixed(digits === undefined ? 1 : digits) + "%";
+};
+
+G.fmtP = function (p) {
+  if (p === null || p === undefined) return "--";
+  return p < 0.001 ? "<0.001" : p.toFixed(3);
+};
+
+/** Which blocks the chosen interval missed. */
+G.misses = function (forecast, method) {
+  const band = forecast.intervals[method];
+  if (!band) return [];
+  const out = [];
+  for (let i = 0; i < forecast.actual.length; i++) {
+    const lo = band.lower[i], hi = band.upper[i];
+    const a = forecast.actual[i];
+    const low = lo !== null && a < lo;
+    const high = hi !== null && a > hi;
+    if (low || high) {
+      out.push({
+        i: i,
+        time: forecast.times[i],
+        actual: a,
+        by: low ? lo - a : a - hi,
+        side: low ? "below" : "above",
+      });
+    }
+  }
+  return out;
+};
+
+G.statTiles = function (forecast, method) {
+  const band = forecast.intervals[method] || {};
+  const missed = G.misses(forecast, method);
+  return [
+    { label: "forecast error (MAPE)", value: forecast.metrics.mape.toFixed(2) + "%" },
+    { label: "mean absolute error", value: G.fmtMw(forecast.metrics.mae) + " MW" },
+    {
+      label: "vs seasonal naive",
+      value: forecast.metrics.baseline_mape.toFixed(2) + "% naive",
+    },
+    { label: "peak error", value: G.fmtMw(forecast.metrics.peak_error) + " MW" },
+    { label: "interval width", value: G.fmtMw(band.mean_width) + " MW" },
+    {
+      label: "blocks covered (of " + forecast.actual.length + ")",
+      value: G.fmtPct(band.coverage, 0) + " / " + G.fmtPct(forecast.nominal, 0),
+    },
+    { label: "blocks missed", value: String(missed.length) },
+    { label: "kind of day", value: forecast.holiday || forecast.day_kind },
+  ];
+};
+
+/** y-range covering the actuals and every band drawn. */
+G.domain = function (forecast, method) {
+  let lo = Infinity, hi = -Infinity;
+  const consider = function (v) {
+    if (v === null || v === undefined || !Number.isFinite(v)) return;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  };
+  forecast.actual.forEach(consider);
+  forecast.point.forEach(consider);
+  const band = forecast.intervals[method];
+  if (band) { band.lower.forEach(consider); band.upper.forEach(consider); }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { lo: 0, hi: 1 };
+  const pad = (hi - lo) * 0.1 || 100;
+  return { lo: lo - pad, hi: hi + pad };
+};
+
+G.scales = function (domain, n, width, height, pad) {
+  return {
+    x: function (i) { return pad.l + (n <= 1 ? 0 : (i / (n - 1)) * (width - pad.l - pad.r)); },
+    y: function (v) {
+      const c = Math.max(domain.lo, Math.min(domain.hi, v));
+      return pad.t + (1 - (c - domain.lo) / (domain.hi - domain.lo)) * (height - pad.t - pad.b);
+    },
+  };
+};
+
+G.linePath = function (values, scales) {
+  let d = "";
+  values.forEach(function (v, i) {
+    if (v === null || v === undefined || !Number.isFinite(v)) return;
+    d += (d ? "L" : "M") + scales.x(i).toFixed(1) + " " + scales.y(v).toFixed(1);
+  });
+  return d;
+};
+
+G.bandPath = function (lower, upper, scales) {
+  const usable = [];
+  for (let i = 0; i < lower.length; i++) {
+    if (Number.isFinite(lower[i]) && Number.isFinite(upper[i])) usable.push(i);
+  }
+  if (!usable.length) return "";
+  let d = "";
+  usable.forEach(function (i, k) {
+    d += (k ? "L" : "M") + scales.x(i).toFixed(1) + " " + scales.y(upper[i]).toFixed(1);
+  });
+  for (let k = usable.length - 1; k >= 0; k--) {
+    const i = usable[k];
+    d += "L" + scales.x(i).toFixed(1) + " " + scales.y(lower[i]).toFixed(1);
+  }
+  return d + "Z";
+};
+
+G.chartNote = function (forecast, method) {
+  const band = forecast.intervals[method] || {};
+  const missed = G.misses(forecast, method);
+  const parts = [
+    "Issued " + forecast.issued + " for all " + forecast.actual.length +
+      " blocks of " + forecast.date + ".",
+  ];
+  if (!missed.length) {
+    parts.push(
+      "The " + method + " band covered every block, at a mean width of " +
+        G.fmtMw(band.mean_width) + " MW."
+    );
+  } else {
+    const worst = missed.reduce(function (a, b) { return b.by > a.by ? b : a; });
+    parts.push(
+      "The " + method + " band missed " + missed.length + " block" +
+        (missed.length === 1 ? "" : "s") + ", worst at " + worst.time +
+        " by " + G.fmtMw(worst.by) + " MW " + worst.side + " the band."
+    );
+  }
+  parts.push(
+    "A single day is 96 blocks, so its coverage is a noisy estimate; the " +
+      "backtest figures below are the ones to read."
+  );
+  return parts.join(" ");
+};
+
+/** The marginal table, best Winkler first. */
+G.marginalRows = function (report) {
+  const intervals = (report && report.intervals) || {};
+  return Object.keys(intervals)
+    .map(function (name) {
+      return {
+        method: name,
+        coverage: intervals[name].coverage,
+        width: intervals[name].mean_width,
+        winkler: intervals[name].winkler,
+      };
+    })
+    .sort(function (a, b) { return a.winkler - b.winkler; });
+};
+
+/** The conditional table for one grouping. */
+G.conditionalRows = function (report, by) {
+  const section = report && report.conditional && report.conditional[by];
+  if (!section) return [];
+  return Object.keys(section)
+    .map(function (name) {
+      const gap = section[name];
+      return {
+        method: name,
+        worst: gap.worst_group_coverage,
+        spread: gap.spread,
+        noise: gap.null_spread_p95,
+        p: gap.spread_p_adjusted === undefined ? gap.spread_p_value : gap.spread_p_adjusted,
+        uneven: gap.uneven_after_correction === undefined
+          ? gap.conditionally_uneven
+          : gap.uneven_after_correction,
+      };
+    })
+    .sort(function (a, b) { return a.spread - b.spread; });
+};
+
+G.conditionalNote = function (report, by) {
+  const rows = G.conditionalRows(report, by);
+  if (!rows.length) return "";
+  const even = rows.filter(function (r) { return !r.uneven; });
+  const label = { block: "block of day", month: "month", kind: "kind of day" }[by] || by;
+  const noise = rows[0].noise;
+  let note =
+    "Spread is the gap between the best and worst group's coverage. With " +
+    "these group sizes, perfect conditional coverage would still produce a " +
+    "spread of up to " + noise.toFixed(3) + " by chance (95th percentile of " +
+    "a simulated null), so only a spread above that is evidence of anything.";
+  if (even.length) {
+    note += " By " + label + ", " + even.map(function (r) { return r.method; }).join(" and ") +
+      " sit within that noise; every other method does not.";
+  } else {
+    note += " By " + label + ", no method stays within it -- including the " +
+      "ones that do on another axis.";
+  }
+  return note;
+};
+
+G.dataFactRows = function (facts) {
+  if (!facts) return [];
+  return [
+    { label: "period", value: String(facts.start).slice(0, 10) + " to " + String(facts.end).slice(0, 10) },
+    { label: "days", value: Number(facts.days).toLocaleString("en-IN") },
+    { label: "15-minute blocks", value: Number(facts.blocks).toLocaleString("en-IN") },
+    { label: "slots present", value: G.fmtPct(facts.completeness) },
+    { label: "load range", value: G.fmtMw(facts.min_mw) + " to " + G.fmtMw(facts.max_mw) + " MW" },
+    { label: "mean load", value: G.fmtMw(facts.mean_mw) + " MW" },
+    { label: "peak day", value: String(facts.peak_day) },
+    { label: "features", value: String(facts.features || "--") },
+  ];
+};
+
+if (typeof module !== "undefined" && module.exports) module.exports = G;
+if (typeof window !== "undefined") window.GRIDCAST = G;
+
+/* ------------------------------------------------------------------ *
+ * DOM wiring.
+ * ------------------------------------------------------------------ */
+
+if (typeof document !== "undefined" && document.getElementById) {
+  const $ = function (id) { return document.getElementById(id); };
+  const esc = function (s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  };
+
+  let report = null;
+  let forecast = null;
+
+  const api = async function (path) {
+    const response = await fetch(path);
+    if (!response.ok) {
+      let detail = response.status + " " + response.statusText;
+      try {
+        const body = await response.json();
+        if (body.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+      } catch (e) { /* not JSON */ }
+      throw new Error(detail);
+    }
+    return response.json();
+  };
+
+  const renderStats = function () {
+    $("stats").innerHTML = G.statTiles(forecast, $("method").value)
+      .map(function (t) {
+        return '<div class="stat"><b>' + esc(t.value) + "</b><span>" + esc(t.label) + "</span></div>";
+      })
+      .join("");
+    $("statsection").hidden = false;
+  };
+
+  const renderChart = function () {
+    const method = $("method").value;
+    const width = 1000, height = 330, pad = { l: 58, r: 12, t: 12, b: 32 };
+    const n = forecast.actual.length;
+    const domain = G.domain(forecast, method);
+    const scales = G.scales(domain, n, width, height, pad);
+    const band = forecast.intervals[method];
+
+    let svg = '<svg viewBox="0 0 ' + width + " " + height + '" role="img" aria-label="day-ahead load forecast">';
+    for (let i = 0; i <= 4; i++) {
+      const v = domain.lo + ((domain.hi - domain.lo) * i) / 4;
+      const yy = scales.y(v);
+      svg += '<line class="ax" x1="' + pad.l + '" y1="' + yy.toFixed(1) + '" x2="' + (width - pad.r) +
+             '" y2="' + yy.toFixed(1) + '" opacity=".45"/>';
+      svg += '<text class="axlabel" x="6" y="' + (yy + 3).toFixed(1) + '">' + G.fmtMw(v) + "</text>";
+    }
+    for (let h = 0; h < 24; h += 3) {
+      const i = Math.min(n - 1, Math.round((h / 24) * n));
+      svg += '<text class="axlabel" text-anchor="middle" x="' + scales.x(i).toFixed(1) +
+             '" y="' + (height - 11) + '">' + String(h).padStart(2, "0") + ":00</text>";
+    }
+    if (band) {
+      const d = G.bandPath(band.lower, band.upper, scales);
+      if (d) svg += '<path d="' + d + '" fill="var(--band)" opacity=".16"/>';
+    }
+    svg += '<path d="' + G.linePath(forecast.point, scales) + '" fill="none" stroke="var(--point)" stroke-width="1.7"/>';
+    svg += '<path d="' + G.linePath(forecast.actual, scales) + '" fill="none" stroke="var(--actual)" stroke-width="1.7"/>';
+    G.misses(forecast, method).forEach(function (m) {
+      svg += '<circle cx="' + scales.x(m.i).toFixed(1) + '" cy="' + scales.y(m.actual).toFixed(1) +
+             '" r="3.1" fill="var(--miss)"/>';
+    });
+    svg += "</svg>";
+    $("chart").innerHTML = svg;
+    $("chartlegend").innerHTML =
+      '<span><i style="background:var(--actual)"></i>actual</span>' +
+      '<span><i style="background:var(--point)"></i>forecast</span>' +
+      '<span><i style="background:var(--band);opacity:.45"></i>' + esc(method) + " band</span>" +
+      '<span><i style="background:var(--miss)"></i>blocks the band missed</span>';
+    $("chartnote").textContent = G.chartNote(forecast, method);
+    $("chartsection").hidden = false;
+  };
+
+  const renderDayMethods = function () {
+    const rows = Object.keys(forecast.intervals).map(function (name) {
+      const band = forecast.intervals[name];
+      return { name: name, coverage: band.coverage, width: band.mean_width,
+               missed: G.misses(forecast, name).length };
+    }).sort(function (a, b) { return a.width - b.width; });
+    $("daymethods").innerHTML =
+      "<thead><tr><th>method</th><th class='num'>covered</th><th class='num'>mean width</th>" +
+      "<th class='num'>blocks missed</th></tr></thead><tbody>" +
+      rows.map(function (r) {
+        return "<tr><td class='name'>" + esc(r.name) + "</td><td class='num'>" +
+          G.fmtPct(r.coverage, 1) + "</td><td class='num'>" + G.fmtMw(r.width) +
+          " MW</td><td class='num'>" + r.missed + "</td></tr>";
+      }).join("") + "</tbody>";
+    $("daymethodsection").hidden = false;
+  };
+
+  const renderMarginal = function () {
+    const rows = G.marginalRows(report);
+    if (!rows.length) return;
+    $("marginal").innerHTML =
+      "<thead><tr><th>method</th><th class='num'>coverage</th><th class='num'>width</th>" +
+      "<th class='num'>Winkler</th></tr></thead><tbody>" +
+      rows.map(function (r, i) {
+        return "<tr class='" + (i === 0 ? "best" : "") + "'><td class='name'>" + esc(r.method) +
+          "</td><td class='num'>" + G.fmtPct(r.coverage) + "</td><td class='num'>" +
+          G.fmtMw(r.width) + "</td><td class='num'>" + G.fmtMw(r.winkler) + "</td></tr>";
+      }).join("") + "</tbody>";
+  };
+
+  const renderConditional = function () {
+    const by = $("by").value;
+    const rows = G.conditionalRows(report, by);
+    if (!rows.length) return;
+    $("conditional").innerHTML =
+      "<thead><tr><th>method</th><th class='num'>worst group</th><th class='num'>spread</th>" +
+      "<th class='num'>noise</th><th>verdict</th></tr></thead><tbody>" +
+      rows.map(function (r) {
+        return "<tr><td class='name'>" + esc(r.method) + "</td><td class='num'>" +
+          G.fmtPct(r.worst) + "</td><td class='num'>" + r.spread.toFixed(3) +
+          "</td><td class='num'>" + r.noise.toFixed(3) + "</td><td class='" +
+          (r.uneven ? "uneven" : "withinnoise") + "'>" +
+          (r.uneven ? "uneven" : "within noise") + "</td></tr>";
+      }).join("") + "</tbody>";
+    $("conditionalnote").textContent = G.conditionalNote(report, by);
+  };
+
+  const renderData = function (facts) {
+    const rows = G.dataFactRows(facts);
+    if (!rows.length) return;
+    $("datafacts").innerHTML = "<tbody>" + rows.map(function (r) {
+      return "<tr><td class='name'>" + esc(r.label) + "</td><td class='num'>" + esc(r.value) + "</td></tr>";
+    }).join("") + "</tbody>";
+    $("datasection").hidden = false;
+  };
+
+  const run = async function () {
+    const button = $("run");
+    button.disabled = true;
+    try {
+      forecast = await api("/api/forecast?date=" + encodeURIComponent($("day").value));
+      if (!$("method").options.length) {
+        $("method").innerHTML = Object.keys(forecast.intervals)
+          .map(function (m) { return '<option value="' + esc(m) + '">' + esc(m) + "</option>"; })
+          .join("");
+        $("method").value = "adaptive conformal";
+      }
+      renderStats(); renderChart(); renderDayMethods();
+    } catch (err) {
+      $("chartnote").innerHTML = '<span class="err">' + esc(err.message) + "</span>";
+      $("chartsection").hidden = false;
+    } finally {
+      button.disabled = false;
+    }
+  };
+
+  window.addEventListener("DOMContentLoaded", async function () {
+    try {
+      const health = await api("/api/health");
+      if (health.status !== "ok") throw new Error(health.error || "service not ready");
+      $("window").textContent = "out-of-sample: " + health.servable.from + " to " + health.servable.to;
+      $("windownote").textContent =
+        "The model was fitted on everything up to " + health.fitted_up_to +
+        " (" + health.train_rows.toLocaleString("en-IN") + " blocks) and calibrated on the " +
+        health.calibration_rows.toLocaleString("en-IN") + " blocks up to " + health.calibrated_up_to +
+        ". Only later dates can be forecast, so nothing shown here was in the training data.";
+
+      const days = await api("/api/days");
+      $("day").innerHTML = days.map(function (d) {
+        const tag = d.holiday ? " (" + d.holiday + ")" : d.kind === "weekday" ? "" : " (" + d.kind + ")";
+        return '<option value="' + d.date + '">' + d.date + esc(tag) + "</option>";
+      }).join("");
+      if (days.length) $("day").value = days[Math.floor(days.length / 2)].date;
+
+      renderData(await api("/api/summary"));
+      try {
+        report = await api("/api/backtest");
+        renderMarginal(); renderConditional();
+        $("measuredsection").hidden = false;
+      } catch (e) { /* no study yet; the page works without it */ }
+
+      await run();
+    } catch (err) {
+      $("windownote").innerHTML = '<span class="err">' + esc(err.message) + "</span>";
+    }
+
+    $("run").addEventListener("click", run);
+    $("day").addEventListener("change", run);
+    $("method").addEventListener("change", function () {
+      if (forecast) { renderStats(); renderChart(); }
+    });
+    $("by").addEventListener("change", renderConditional);
+  });
+}
+</script>
+</body>
+</html>
