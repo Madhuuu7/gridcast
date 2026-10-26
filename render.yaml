@@ -1,0 +1,49 @@
+# Render blueprint for the free tier.
+#
+# The awkward part of deploying this one is the data. gridcast is only
+# interesting because it runs on three years of real SLDC readings, and those
+# live in `data/raw/` which is gitignored -- 1,100 small CSVs do not belong in
+# a repository, and Render's free tier has an ephemeral disk that discards
+# them on every restart anyway.
+#
+# So the build fetches a window rather than the full history: enough to fit,
+# calibrate and serve a few weeks of out-of-sample days, which is what the
+# console needs. It costs a few minutes of build time and means a deployed
+# instance shows real forecasts on real days rather than a placeholder.
+#
+# The full three-year study behind the README is not run here. It takes about
+# three minutes of CPU and the numbers are already committed in the README;
+# re-deriving them on a 512 MB free instance at every deploy would be slow and
+# would prove nothing new. `reports/backtest.json` is absent on the deployed
+# instance, so the console simply hides its "measured" panel -- which is why
+# that panel degrades instead of erroring.
+#
+# Also note: the free instance sleeps after 15 idle minutes, and this service
+# fits its model at startup, so the first request after a cold start waits
+# about ten seconds for the boosting fit as well as the wake-up.
+services:
+  - type: web
+    name: gridcast
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -e .
+      python scripts/fetch_data.py --years 1.2 --workers 4
+    startCommand: uvicorn gridcast.api.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.1"
+      # The console and the report are found by searching upward for
+      # web/index.html, which works for the editable install above. Pinned
+      # anyway, because a 404 on the console is a silent failure.
+      - key: GRIDCAST_ROOT
+        value: /opt/render/project/src
+      # A shorter servable window than the default, since the build fetches
+      # less history than a local run.
+      - key: GRIDCAST_SERVABLE_DAYS
+        value: "30"
+      - key: GRIDCAST_CALIBRATION_DAYS
+        value: "45"
