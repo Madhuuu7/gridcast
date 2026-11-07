@@ -16,6 +16,8 @@ it is a time machine for the afternoon ones.
 
 from __future__ import annotations
 
+from datetime import date
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -202,3 +204,101 @@ def test_a_gap_in_the_history_removes_rows_rather_than_inventing_them():
     assert missing_window.empty
     # The rows that depended on that window as a lag are gone too, not filled.
     assert y.loc["2025-01-22":"2025-01-24"].size < 3 * BLOCKS_PER_DAY
+
+
+# -- a page that reports, but reports nothing ------------------------------
+
+
+def _page(values: list[float]) -> str:
+    """A Loaddata.aspx page, in the shape the parser's regex expects.
+
+    The cells are wrapped in <font> because the real page wraps them, and a
+    fixture that skips the wrapper parses to nothing -- which makes an
+    "it was rejected" assertion pass for entirely the wrong reason.
+    """
+    rows = []
+    for i, value in enumerate(values):
+        hh, mm = divmod(i * 5, 60)
+        cells = "".join(
+            f"<td><font>{value:.2f}</font></td>" for _ in range(6)
+        )
+        rows.append(
+            f'<tr><td><font>{hh % 24:02d}:{mm:02d}</font></td>{cells}</tr>'
+        )
+    return '<table id="DGGridAv">' + "".join(rows) + "</table>"
+
+
+def test_the_page_fixture_really_parses():
+    """Guard the guard: if this fixture stops parsing, the rejection tests
+    below start passing because nothing was read at all."""
+    from gridcast.data.sldc import parse_day
+
+    parsed = parse_day(_page([4000.0 + i for i in range(20)]), date(2026, 1, 1))
+    assert len(parsed) == 20
+    assert parsed["delhi"].iloc[0] == 4000.0
+
+
+def test_a_day_of_one_repeated_reading_is_not_a_day():
+    """The failure mode that parses perfectly and is entirely false.
+
+    The SLDC page sometimes returns its current value in every row instead
+    of the day's series. The result has the right row count, no nulls and a
+    clean index, so nothing downstream objects -- the causality guard is
+    satisfied and the model trains on it happily. What it teaches is the
+    one thing about the grid that is certainly untrue: that demand can hold
+    a single value from midnight to midnight.
+
+    Two of 1,097 cached days were like this, and one of them was selectable
+    in the console, where it drew a dead flat line of outcomes beneath a
+    forecast that varied by 1,500 MW.
+    """
+    from gridcast.data.sldc import parse_day
+
+    parsed = parse_day(_page([4311.53] * 286), date(2026, 10, 16))
+    assert parsed.empty, "a snapshot page must be treated as unpublished"
+
+
+def test_a_genuinely_varying_day_still_parses():
+    """The guard must not reject real data, which also moves slowly at night."""
+    from gridcast.data.sldc import parse_day
+
+    parsed = parse_day(_page([4000.0 + i * 0.5 for i in range(286)]), date(2026, 10, 17))
+    assert len(parsed) == 286
+    assert parsed["delhi"].nunique() > 1
+
+
+def test_a_short_day_is_not_mistaken_for_a_snapshot():
+    """Three identical readings is a short day, not a page that failed.
+
+    The guard needs enough rows to be evidence; rejecting any constant run
+    would throw away genuinely short days, which the archive has plenty of.
+    """
+    from gridcast.data.sldc import parse_day
+
+    parsed = parse_day(_page([4311.53] * 3), date(2026, 1, 1))
+    assert len(parsed) == 3
+
+
+def test_the_cache_loader_skips_snapshot_days_already_on_disk(tmp_path):
+    """Days cached before the guard existed are still on disk.
+
+    Deleting them is worse than skipping them: the next fetch writes them
+    straight back.
+    """
+    import pandas as pd
+    from gridcast.data.sldc import load_cached
+
+    good = pd.DataFrame(
+        {"delhi": [4000.0 + i for i in range(20)]},
+        index=pd.date_range("2026-01-01", periods=20, freq="5min", name="timestamp"),
+    )
+    flat = pd.DataFrame(
+        {"delhi": [4311.53] * 20},
+        index=pd.date_range("2026-01-02", periods=20, freq="5min", name="timestamp"),
+    )
+    good.to_csv(tmp_path / "2026-01-01.csv")
+    flat.to_csv(tmp_path / "2026-01-02.csv")
+
+    loaded = load_cached(tmp_path)
+    days = {ts.date() for ts in pd.DatetimeIndex(loaded.index)}
+    assert days == {date(2026, 1, 1)}

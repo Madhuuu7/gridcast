@@ -120,7 +120,35 @@ def parse_day(html: str, day: date) -> pd.DataFrame:
     for column in COLUMNS:
         if column not in frame:
             frame[column] = pd.NA
-    return frame[list(COLUMNS)].astype("Float64").astype("float64")
+    frame = frame[list(COLUMNS)].astype("Float64").astype("float64")
+    return _empty() if _is_snapshot(frame) else frame
+
+
+def _is_snapshot(frame: pd.DataFrame, target: str = "delhi") -> bool:
+    """Whether the page gave one reading repeated down the whole table.
+
+    A second failure mode of the same kind as the zero. The page sometimes
+    returns its current value in every row rather than the day's series, so
+    the result parses perfectly, has the right number of rows, carries no
+    nulls and is entirely false: 286 timestamps all reading 4311.53 MW.
+
+    Nothing downstream catches it. The causality guard is satisfied, the
+    model trains on it happily, and it teaches the one thing about the grid
+    that is certainly untrue -- that demand can hold a single value from
+    midnight to midnight. In the console it renders as a dead flat line of
+    outcomes under a forecast that varies by 1,500 MW.
+
+    Delhi's load moves several hundred MW between any two hours of any day,
+    so a day with one distinct reading is a page that did not report, and it
+    is treated as the archive already treats an absent day: missing, not
+    zero and not flat. Two of 1,097 cached days were like this.
+    """
+    if target not in frame or frame.empty:
+        return False
+    readings = frame[target].dropna()
+    # Below a few readings "constant" is not evidence of anything; a short
+    # day is handled as a short day.
+    return readings.size >= 12 and readings.nunique() <= 1
 
 
 def _reading(raw: str) -> float:
@@ -231,10 +259,27 @@ class SldcClient:
 
 
 def load_cached(cache_dir: str | Path = "data/raw/sldc") -> pd.DataFrame:
-    """Everything already on disk, without touching the network."""
+    """Everything already on disk, without touching the network.
+
+    The snapshot check runs here too, not only in the parser. Days cached
+    before the check existed are still on disk and would otherwise keep
+    feeding a flat line into every model fitted from this cache -- and
+    deleting them is worse, because the next fetch would write them back.
+    """
     paths = sorted(Path(cache_dir).glob("*.csv"))
     if not paths:
         return _empty()
-    frames = [pd.read_csv(p, index_col="timestamp", parse_dates=True) for p in paths]
+    frames = []
+    for path in paths:
+        frame = pd.read_csv(path, index_col="timestamp", parse_dates=True)
+        if _is_snapshot(frame):
+            log.warning(
+                "%s holds one reading repeated for the whole day; treating it "
+                "as unpublished", path.name,
+            )
+            continue
+        frames.append(frame)
+    if not frames:
+        return _empty()
     combined = pd.concat(frames).sort_index()
     return combined[~combined.index.duplicated(keep="last")]
