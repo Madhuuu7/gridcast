@@ -48,12 +48,15 @@ from fastapi.staticfiles import StaticFiles
 
 from ..conformal import (
     AdaptiveConformal,
+    BlockCovariates,
     GaussianIntervals,
+    LocalizedConformal,
     MondrianConformal,
     SplitConformal,
     conformal_quantile,
 )
 from ..data.calendar import day_kind, holiday_name
+from ..evaluate import day_kinds
 from ..data.dataset import BLOCKS_PER_DAY, ISSUE_HOUR, block_of_day, build_features, summarise, to_blocks
 from ..data.sldc import load_cached
 from ..data.weather import fetch_weather
@@ -82,6 +85,10 @@ def _find_root() -> Path:
 
 ROOT = _find_root()
 WEB = ROOT / "web"
+#: The built console. Vite emits here; a source checkout that has never run
+#: the build has no dist, and `/` says how to make one rather than 404ing
+#: with no explanation.
+CONSOLE = WEB / "dist"
 BACKTEST = ROOT / "reports" / "backtest.json"
 
 #: Days at the end of the record the service will forecast. Everything before
@@ -169,8 +176,30 @@ class ForecastService:
             "mondrian conformal": MondrianConformal(self.alpha).fit(
                 self.cal_resid, groups=self.cal_blocks
             ),
+            # The project's headline method, and the one the daily job
+            # publishes. Omitting it here meant the replay view could show
+            # every method except the one the README argues for.
+            "localized conformal": LocalizedConformal(self.alpha).fit(
+                self.cal_resid, covariates=self._covariates(self.X[cal])
+            ),
         }
         self.ready = True
+
+    @staticmethod
+    def _covariates(frame: pd.DataFrame) -> BlockCovariates:
+        """The three axes the kernel compares blocks on.
+
+        Temperature comes out of the feature frame rather than being
+        refetched, so the kernel sees exactly the weather the point model
+        saw -- including the rows where it is missing.
+        """
+        index = pd.DatetimeIndex(frame.index)
+        temperature = (
+            frame["temperature_2m"].to_numpy(dtype=float)
+            if "temperature_2m" in frame.columns
+            else None
+        )
+        return BlockCovariates(block_of_day(index), day_kinds(index), temperature)
 
     # -- serving ---------------------------------------------------------
 
@@ -205,6 +234,10 @@ class ForecastService:
         for name, method in self.methods.items():
             if isinstance(method, MondrianConformal):
                 intervals = method.predict(point, groups=blocks)
+            elif isinstance(method, LocalizedConformal):
+                intervals = method.predict(
+                    point, covariates=self._covariates(features)
+                )
             else:
                 intervals = method.predict(point)
             bands[name] = {
@@ -368,13 +401,112 @@ def create_app(cache: Path | str = "data/raw") -> FastAPI:
             )
         return JSONResponse(json.loads(BACKTEST.read_text(encoding="utf-8")))
 
+    # -- the live record -------------------------------------------------
+    #
+    # These two read the database rather than the fitted model. They are the
+    # only endpoints whose answers nobody here chose: the forecasts were
+    # written before the outcomes existed, and a deploy that has issued
+    # nothing yet says so rather than showing an empty chart.
+
+    def _store():
+        from ..store import create_db_engine, session_factory
+
+        engine = create_db_engine()
+        return session_factory(engine)
+
+    @app.get("/api/schedule")
+    def schedule() -> dict[str, Any]:
+        """The most recent issued schedule, and its outcome if there is one."""
+        from ..scorecard import score_day
+        from ..store import issued_days, latest_run, observations_for, session_scope
+
+        try:
+            factory = _store()
+            with session_scope(factory) as session:
+                days_issued = issued_days(session)
+                if not days_issued:
+                    return {"issued": False, "reason": "nothing has been issued yet"}
+                target = days_issued[-1]
+                run = latest_run(session, target)
+                observed = observations_for(session, target)
+                score = score_day(session, target)
+                blocks = sorted(run.blocks, key=lambda b: b.block)
+                return {
+                    "issued": True,
+                    "target_date": str(target),
+                    "issued_at": run.issued_at.isoformat(),
+                    "gate": run.gate,
+                    "method": run.method,
+                    "model": run.model,
+                    "alpha": run.alpha,
+                    "kernel": run.kernel,
+                    "code_version": run.code_version,
+                    "note": run.note,
+                    "day_kind": day_kind(target),
+                    "holiday": holiday_name(target),
+                    "calibration": {
+                        "from": str(run.calibration_start),
+                        "to": str(run.calibration_end),
+                    },
+                    "train_rows": run.train_rows,
+                    "blocks": [
+                        {
+                            "block": b.block,
+                            "point": b.point_mw,
+                            "lower": b.lower_mw,
+                            "upper": b.upper_mw,
+                            "actual": observed.get(b.block),
+                        }
+                        for b in blocks
+                    ],
+                    "score": score.as_dict() if score else None,
+                }
+        except Exception as exc:  # the desk degrades rather than 500s
+            log.warning("schedule unavailable: %s", exc)
+            return {"issued": False, "reason": str(exc)}
+
+    @app.get("/api/record")
+    def record() -> dict[str, Any]:
+        """Every issued day, scored against what the grid actually drew."""
+        from ..scorecard import build_record, cost_of_record, interval_value
+        from ..store import session_scope
+
+        try:
+            factory = _store()
+            with session_scope(factory) as session:
+                built = build_record(session)
+                body = built.as_dict()
+                if built.scored_blocks:
+                    body["interval_value"] = interval_value(session)
+                    body["cost"] = cost_of_record(session)
+                return body
+        except Exception as exc:
+            log.warning("record unavailable: %s", exc)
+            return {"totals": {"days": 0, "blocks": 0}, "days": [], "error": str(exc)}
+
     @app.get("/")
     def console() -> FileResponse:
-        index = WEB / "index.html"
+        index = CONSOLE / "index.html"
         if not index.is_file():
-            raise HTTPException(status_code=404, detail="console not built")
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "console not built; run `npm install && npm run build` in web/"
+                    if WEB.is_dir()
+                    else "console not found"
+                ),
+            )
         return FileResponse(index)
 
+    if (CONSOLE / "assets").is_dir():
+        app.mount(
+            "/assets", StaticFiles(directory=CONSOLE / "assets"), name="assets"
+        )
+    # The typefaces are served from here rather than from a font host, so
+    # the console renders in the right face offline and does not pay a
+    # third-party round trip on a cold free-tier start.
+    if (CONSOLE / "fonts").is_dir():
+        app.mount("/fonts", StaticFiles(directory=CONSOLE / "fonts"), name="fonts")
     if WEB.is_dir():
         app.mount("/web", StaticFiles(directory=WEB), name="web")
 

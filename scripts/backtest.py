@@ -362,7 +362,10 @@ def study_weather_penalty(blocks, X, y, cache: Path, folds, lead_days: int = 2) 
     )
 
     paired = predicted[["temperature_2m"]].join(
-        analysis[["temperature_2m"]], how="inner", rsuffix="_analysis"
+        analysis[["temperature_2m"]].rename(
+            columns={"temperature_2m": "temperature_2m_analysis"}
+        ),
+        how="inner",
     ).dropna()
     temp_error = paired["temperature_2m"] - paired["temperature_2m_analysis"]
     print(f"  lead-{lead_days} temperature against the analysis: "

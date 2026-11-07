@@ -7,3 +7,7 @@ data/raw/
 data/processed/
 reports/
 *.db
+# SQLite keeps its write-ahead log beside the database; both are local
+# state and neither belongs in the repository.
+*.db-wal
+*.db-shm

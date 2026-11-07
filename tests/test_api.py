@@ -217,35 +217,83 @@ def test_the_openapi_schema_describes_every_endpoint(client):
         assert path in paths
 
 
-def test_the_page_is_self_contained():
-    """No CDN, no font host, no analytics: the demo has to work offline."""
-    html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-    assert "http://" not in html
-    assert "https://" not in html
-    assert "<link" not in html
+def test_the_console_is_self_contained():
+    """No CDN, no font host, no analytics: the demo has to work offline.
+
+    This held for the hand-written page it replaced and nearly did not
+    survive the rebuild -- a Google Fonts link is the obvious way to get a
+    typeface and it costs a third-party round trip on exactly the cold
+    free-tier start where the page is slowest. The faces are served from
+    this origin instead, so the check is on the *built* bundle rather than
+    on the source, which is where a stray CDN reference would actually
+    reach a visitor.
+    """
+    built = ROOT / "web" / "dist" / "index.html"
+    if not built.is_file():
+        pytest.skip("console not built; run npm run build in web/")
+    html = built.read_text(encoding="utf-8")
+    for origin in ("http://", "https://"):
+        # The inline SVG favicon carries an xmlns URL, which is a namespace
+        # identifier and not a fetch.
+        offenders = [
+            line for line in html.splitlines()
+            if origin in line and "www.w3.org/2000/svg" not in line
+        ]
+        assert not offenders, offenders
+
+    assets = ROOT / "web" / "dist" / "assets"
+    for sheet in assets.glob("*.css"):
+        text = sheet.read_text(encoding="utf-8")
+        assert "fonts.googleapis" not in text
+        assert "fonts.gstatic" not in text
+        assert "@font-face" in text, "the typefaces must be declared locally"
+
+    fonts = sorted((ROOT / "web" / "dist" / "fonts").glob("*.woff2"))
+    assert fonts, "no self-hosted fonts were emitted"
+    total = sum(f.stat().st_size for f in fonts)
+    # Latin subsets only. A full set would be several hundred kB on a page
+    # whose whole bundle is under 250.
+    assert total < 200_000, f"{total} bytes of fonts is more than latin needs"
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_console_harness_passes_on_its_fixtures():
+@pytest.mark.skipif(shutil.which("npm") is None, reason="npm is not installed")
+def test_the_console_logic_is_tested_on_its_own():
+    """The console's arithmetic has its own suite; run it from here too.
+
+    The page this replaced was checked by a bespoke node harness that drove
+    its DOM. The rebuilt console is a component tree, so the part worth
+    testing -- reading a band, choosing axis ticks, the colour ramp -- was
+    pulled into plain functions and tested directly. Running it from the
+    Python suite keeps one command that checks the whole project.
+    """
+    if not (ROOT / "web" / "node_modules").is_dir():
+        pytest.skip("console dependencies not installed; run npm install in web/")
     result = subprocess.run(
-        [shutil.which("node"), str(HARNESS)],
-        capture_output=True, text=True, cwd=ROOT, timeout=120,
+        [shutil.which("npm"), "test", "--silent"],
+        capture_output=True, text=True, cwd=ROOT / "web", timeout=300,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
 
 @needs_data
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_the_console_handles_a_live_forecast(client, forecast, tmp_path):
-    """The shape check that the Python tests cannot do: a response the page
-    cannot render is a broken page, and nothing else would catch it."""
-    path = tmp_path / "forecast.json"
-    path.write_text(json.dumps(forecast), encoding="utf-8")
-    result = subprocess.run(
-        [shutil.which("node"), str(HARNESS), "--forecast", str(path)],
-        capture_output=True, text=True, cwd=ROOT, timeout=120,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
+def test_the_forecast_response_is_shaped_the_way_the_console_reads_it(forecast):
+    """A response the page cannot render is a broken page.
+
+    The console reads metrics from a nested object and the day kind from
+    `day_kind`; an earlier version of it guessed both wrong and rendered a
+    52% skill figure as 1% and the error as an em dash. Nothing in the
+    Python tests would have caught either, because the service was right.
+    """
+    assert {"date", "day_kind", "blocks", "times", "actual", "point", "intervals",
+            "metrics", "alpha"} <= set(forecast)
+    assert {"mape", "mae", "peak_error"} <= set(forecast["metrics"])
+    # The method the README argues for has to be among them, or the console
+    # can show every interval except the one the project is about.
+    assert "localized conformal" in forecast["intervals"]
+    n = len(forecast["point"])
+    for name, band in forecast["intervals"].items():
+        assert len(band["lower"]) == n, name
+        assert len(band["upper"]) == n, name
 
 
 @needs_data
