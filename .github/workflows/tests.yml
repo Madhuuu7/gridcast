@@ -1,0 +1,47 @@
+# The suite, on every push.
+#
+# The tests that need three years of cached SLDC data skip themselves when
+# it is absent, which is most of what `needs_data` marks. Everything that
+# matters about the maths -- the conformal quantiles, the kernel, the
+# leakage guard, the store's refusal to accept a hindcast -- builds its own
+# data and runs here.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+
+  console:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm test
+        working-directory: web
+      # A type error or a broken import is a blank page in production, and
+      # the Python suite cannot see either.
+      - run: npm run build
+        working-directory: web

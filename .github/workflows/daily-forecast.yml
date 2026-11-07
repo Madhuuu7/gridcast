@@ -1,0 +1,110 @@
+# Declare tomorrow's schedule, every day, without anyone's laptop being on.
+#
+# This is the answer to "who fixes the value". Nobody does: the model fixes
+# it at the gate and the store refuses to let it be edited afterwards. What
+# this file adds is the only missing piece -- something that actually runs
+# at the gate. Before it existed the daily job had to be invoked by hand,
+# which meant the record had a gap whenever nobody remembered.
+#
+# It runs on GitHub's servers, free and unlimited for a public repository.
+#
+# The one secret it needs is DATABASE_URL, pointing at the same Postgres the
+# deployed service reads. Without it the job would write to a SQLite file on
+# an ephemeral runner and the forecast would vanish with the container, so
+# the workflow checks for it and stops with a readable message instead.
+
+name: daily forecast
+
+on:
+  schedule:
+    # 04:45 UTC is 10:15 IST -- a quarter hour after the scheduling gate,
+    # which is when a real scheduler has published and the forecast becomes
+    # a claim rather than a draft. GitHub's cron is best-effort and can run
+    # late under load; the store rejects anything that slips past midnight
+    # IST, so a very late run leaves an honest gap rather than a backdated
+    # row.
+    - cron: "45 4 * * *"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target date (YYYY-MM-DD). Defaults to tomorrow IST."
+        required: false
+      reissue:
+        description: "Publish a second run for a day that already has one"
+        type: boolean
+        default: false
+
+concurrency:
+  # Two issuances racing for the same day would both be refused by the
+  # store, but the fetch would still hammer a government website twice.
+  group: daily-forecast
+  cancel-in-progress: false
+
+jobs:
+  issue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Restore the SLDC cache
+        # One CSV per day, about 45 MB for three years. Restoring it means a
+        # daily run fetches the handful of days it is missing instead of
+        # re-pulling three years from a public government server every
+        # morning. The key rolls monthly so the cache cannot grow forever.
+        uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: sldc-${{ github.run_id }}
+          restore-keys: |
+            sldc-
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Check the database is configured
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::DATABASE_URL is not set. Add it as a repository"
+            echo "::error::secret pointing at the deployed Postgres, or the"
+            echo "::error::forecast is written to a container that is about"
+            echo "::error::to be destroyed."
+            exit 1
+          fi
+
+      - name: Top up the load archive
+        # Eighteen months is enough to fit and calibrate. A cold cache pays
+        # for this once; after that it fetches only the new days.
+        run: python scripts/fetch_data.py --years 1.5 --workers 3
+
+      - name: Migrate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: alembic upgrade head
+
+      - name: Record what the grid actually drew
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scripts/issue_forecast.py --observe
+
+      - name: Declare tomorrow
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python scripts/issue_forecast.py \
+            ${{ inputs.target && format('--target {0}', inputs.target) || '' }} \
+            ${{ inputs.reissue && '--reissue' || '' }}
+
+      - name: Show the record
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scripts/issue_forecast.py --scorecard
