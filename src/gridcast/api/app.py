@@ -119,14 +119,34 @@ class ForecastService:
         index = pd.DatetimeIndex(self.X.index)
 
         self.serve_from = last - timedelta(days=SERVABLE_DAYS)
-        self.cal_from = self.serve_from - timedelta(days=CALIBRATION_DAYS)
         self.data_end = last
         self.data_start = first
 
-        train = index < pd.Timestamp(self.cal_from)
-        cal = (index >= pd.Timestamp(self.cal_from)) & (
-            index < pd.Timestamp(self.serve_from)
-        )
+        # The calibration window is a number of *rows*, not a number of
+        # days. Measured in days it silently collapses wherever the archive
+        # is thin: the August-September 2026 gap left a 45-day window
+        # holding 1,397 of its 4,320 blocks, which is 14 per block group
+        # against a Mondrian minimum of 20, so every group fell back to the
+        # pooled quantile and the per-block method quietly became split
+        # conformal. Nothing failed -- the bands just stopped varying.
+        #
+        # Taking the last N available rows instead means a sparse stretch
+        # makes the window reach further back in time rather than hold less
+        # data. That trades some staleness for the conditional coverage the
+        # method exists for, and `cal_from` below reports the span it
+        # actually used so the trade is visible rather than assumed.
+        wanted = CALIBRATION_DAYS * 96
+        before_serve = np.flatnonzero(index < pd.Timestamp(self.serve_from))
+        cal_rows = before_serve[-wanted:]
+        cal = np.zeros(len(index), dtype=bool)
+        cal[cal_rows] = True
+        train = np.zeros(len(index), dtype=bool)
+        if cal_rows.size:
+            train[: cal_rows[0]] = True
+            self.cal_from = index[cal_rows[0]].date()
+        else:
+            self.cal_from = self.serve_from
+
         if train.sum() < 5000 or cal.sum() < 500:
             self.error = (
                 f"not enough history: {int(train.sum())} training rows and "

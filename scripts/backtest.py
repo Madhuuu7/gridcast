@@ -46,7 +46,10 @@ from gridcast.data.dataset import (  # noqa: E402
     to_blocks,
 )
 from gridcast.data.sldc import load_cached  # noqa: E402
-from gridcast.data.weather import fetch_weather  # noqa: E402
+from gridcast.data.weather import (  # noqa: E402
+    fetch_previous_forecast,
+    fetch_weather,
+)
 from gridcast.evaluate import make_folds, run_backtest  # noqa: E402
 from gridcast.models import (  # noqa: E402
     BoostedForecaster,
@@ -350,6 +353,83 @@ def study_bandwidth(X, y, folds, settings) -> dict:
     return out
 
 
+def study_weather_penalty(blocks, X, y, cache: Path, folds, lead_days: int = 2) -> dict:
+    rule("8. what the forecast costs when the weather is also forecast")
+    first, last = blocks.index.min().date(), blocks.index.max().date()
+    analysis = fetch_weather(first, last, cache_dir=cache / "weather")
+    predicted = fetch_previous_forecast(
+        first, last, lead_days=lead_days, cache_dir=cache / "weather_forecast"
+    )
+
+    paired = predicted[["temperature_2m"]].join(
+        analysis[["temperature_2m"]], how="inner", rsuffix="_analysis"
+    ).dropna()
+    temp_error = paired["temperature_2m"] - paired["temperature_2m_analysis"]
+    print(f"  lead-{lead_days} temperature against the analysis: "
+          f"{len(paired):,} hours, MAE {temp_error.abs().mean():.2f}C, "
+          f"bias {temp_error.mean():+.2f}C, "
+          f"p95 |error| {temp_error.abs().quantile(0.95):.2f}C")
+
+    X_fc, y_fc = build_features(blocks, predicted)
+    # Score both on the rows the forecast-weather build survives, so the
+    # comparison is not partly a comparison of different row sets -- the
+    # previous-runs archive has gaps the analysis does not.
+    common = X.index.intersection(X_fc.index)
+    X_fc, y_fc = X_fc.loc[common], y_fc.loc[common]
+    honest = run_backtest(
+        X.loc[common], y.loc[common], BoostedForecaster,
+        alpha=ALPHA, folds=folds, verbose=False,
+    )
+    realistic = run_backtest(
+        X_fc, y_fc, BoostedForecaster, alpha=ALPHA, folds=folds, verbose=False,
+    )
+
+    out = {"lead_days": lead_days, "hours_paired": len(paired),
+           "temp_mae_c": float(temp_error.abs().mean())}
+    print(f"\n  {'weather at fit time':24s} {'MAPE':>7s} {'MAE':>9s} "
+          f"{'coverage':>9s} {'width':>8s} {'Winkler':>9s}")
+    for label, result in (("the analysis", honest), (f"a lead-{lead_days} forecast", realistic)):
+        point = result.point_metrics()
+        intervals = result.intervals("localized conformal")
+        marginal = intervals.evaluate(result.frame["actual"].to_numpy())
+        out[label] = {**point, **marginal}
+        print(f"  {label:24s} {point['mape']:6.2f}% {point['mae']:8.1f} "
+              f"{marginal['coverage']:8.1%} {marginal['mean_width']:7.0f} "
+              f"{marginal['winkler']:9.0f}")
+
+    honest_mape = honest.point_metrics()["mape"]
+    real_mape = realistic.point_metrics()["mape"]
+    out["mape_penalty_points"] = float(real_mape - honest_mape)
+    out["mape_penalty_relative"] = float((real_mape - honest_mape) / honest_mape)
+    print(f"\n  The penalty is {real_mape - honest_mape:.2f} MAPE points, "
+          f"{(real_mape - honest_mape) / honest_mape:.0%} worse.")
+    print("  Every other number in this study is computed with the weather")
+    print("  the day actually had, which nobody has at a 10:00 gate. This is")
+    print("  the size of that advantage, and the gap between these figures")
+    print("  and what a production system would report.")
+
+    # Whether the interval absorbs the extra error or breaks under it is the
+    # question, so it gets read off the numbers rather than asserted.
+    honest_cov = out["the analysis"]["coverage"]
+    real_cov = out[f"a lead-{lead_days} forecast"]["coverage"]
+    widened = (
+        out[f"a lead-{lead_days} forecast"]["mean_width"]
+        / out["the analysis"]["mean_width"] - 1.0
+    )
+    nominal = 1.0 - ALPHA
+    if abs(real_cov - nominal) <= 0.015:
+        print(f"\n  The interval absorbs it: coverage holds at {real_cov:.1%}")
+        print(f"  against {nominal:.0%} nominal while the band widens {widened:+.0%}.")
+        print("  The conformal quantile is computed from residuals that")
+        print("  already contain the weather error, so it prices the unknown")
+        print("  weather in without being told about it.")
+    else:
+        print(f"\n  The interval does not absorb it: coverage moves from "
+              f"{honest_cov:.1%} to {real_cov:.1%} against {nominal:.0%} "
+              f"nominal, on {widened:+.0%} width.")
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--quick", action="store_true")
@@ -428,6 +508,10 @@ def main() -> int:
             )
         )
         results["bandwidth"] = study_bandwidth(X, y, folds, settings)
+    if "8" not in skip:
+        results["weather_penalty"] = study_weather_penalty(
+            blocks, X, y, args.cache, folds
+        )
 
     results["elapsed_s"] = time.perf_counter() - started
     args.json.parent.mkdir(parents=True, exist_ok=True)

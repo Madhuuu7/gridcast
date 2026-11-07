@@ -154,6 +154,130 @@ def build_features(
     # and real data has gaps. Reindexing to the full range makes a 48-hour
     # lag mean 48 hours rather than "192 rows ago, whenever those were".
     full = pd.date_range(series.index.min(), series.index.max(), freq=BLOCK)
+    return _design_and_target(series, full, weather, issue_hour, lags)
+
+
+def forecast_design(
+    blocks: pd.DataFrame,
+    weather: pd.DataFrame | None,
+    day: date,
+    *,
+    target: str = "delhi",
+    issue_hour: int = ISSUE_HOUR,
+    lags: tuple[int, ...] = SAME_BLOCK_LAGS,
+) -> pd.DataFrame:
+    """The design matrix for a day that has not happened yet.
+
+    ``build_features`` can only describe days the load series covers,
+    because it drops any row whose target is missing -- which is every row
+    of tomorrow. Issuing a real forecast needs the same columns, in the same
+    order, for 96 blocks with no load at all.
+
+    So the grid is extended past the last reading and the identical
+    construction runs over it. Every feature is already causal by design:
+    the lags reach back 48 hours or more and the day-level summaries are
+    taken at the gate, so none of them wanted tomorrow's load anyway. The
+    one input that genuinely has to come from somewhere else is the
+    weather, which is why the caller passes a *forecast* here and a
+    reanalysis to ``build_features``.
+
+    Always returns 96 rows, and some of them may carry gaps. A real
+    scheduler has to publish a number for every block of tomorrow whatever
+    the archive did, so refusing the day is not available: the SLDC record
+    has holes, and a block whose 48-hour lag falls in one is routine rather
+    than exceptional. The boosted model consumes a missing feature natively,
+    and ``incomplete_blocks`` counts the affected rows so the forecast
+    record can say which blocks were made on partial information instead of
+    presenting them as equal to the rest.
+
+    What it does refuse is a day it cannot describe at all -- no weather, or
+    a grid that does not reach the target date -- because that is a broken
+    feed rather than a gap in the data.
+    """
+    if target not in blocks:
+        raise ValueError(f"no column {target!r} in the block frame")
+    series = blocks[target].astype(float)
+    day_start = pd.Timestamp(day)
+    last_needed = day_start + pd.Timedelta(days=1) - pd.Timedelta(BLOCK)
+    if last_needed <= series.index.max():
+        raise ValueError(
+            f"{day} is already covered by the load series; use build_features "
+            f"for a day that has happened"
+        )
+
+    # The weather has to actually cover the target day. Checked before the
+    # join rather than after, because `_weather_features` interpolates with
+    # `limit_direction="both"`, which forward-fills past the end of the
+    # series: a weather feed that stopped last Tuesday produces a complete
+    # design matrix carrying last Tuesday's temperature for tomorrow, with
+    # nothing missing for a null check to find. The silent version of this
+    # failure is a forecast for a 40C day made at 24C.
+    if weather is not None and not weather.empty:
+        covered_to = pd.Timestamp(weather.index.max())
+        if covered_to < last_needed:
+            raise ValueError(
+                f"the weather series ends {covered_to} and does not reach the "
+                f"target day {day}, whose last block starts {last_needed}. It "
+                f"would be forward-filled into a complete-looking design "
+                f"matrix holding stale temperatures"
+            )
+
+    full = pd.date_range(series.index.min(), last_needed, freq=BLOCK)
+    features, _ = _design_and_target(
+        series.reindex(full), full, weather, issue_hour, lags, dropna=False
+    )
+    rows = features[pd.DatetimeIndex(features.index).normalize() == day_start]
+    if len(rows) != BLOCKS_PER_DAY:
+        raise ValueError(
+            f"the grid produced {len(rows)} blocks for {day}, not "
+            f"{BLOCKS_PER_DAY}; the index is malformed"
+        )
+    if rows.isna().all(axis=1).any():
+        raise ValueError(
+            f"some blocks of {day} have no features at all, which means the "
+            f"weather feed does not reach the target day rather than that "
+            f"the load archive has a gap"
+        )
+    # A whole column missing is a feed that does not reach the target day,
+    # not a gap in it. Letting that through produced a forecast for a day
+    # with no weather at all, which the boosted model served without
+    # complaint because it handles missing features natively -- the dangerous
+    # kind of failure, since the output looks like a forecast.
+    empty = [column for column in rows.columns if rows[column].isna().all()]
+    if empty:
+        raise ValueError(
+            f"no values at all for {empty[:6]} on {day}: the feed behind "
+            f"those columns does not reach the target day"
+        )
+    return rows
+
+
+def incomplete_blocks(design: pd.DataFrame) -> int:
+    """How many rows of a forecast design carry a missing feature.
+
+    Recorded alongside the forecast rather than fixed. A block whose
+    48-hour lag fell in an archive gap was forecast on less information
+    than its neighbours, and that is a property of the forecast worth
+    keeping next to it.
+    """
+    return int(design.isna().any(axis=1).sum())
+
+
+def _design_and_target(
+    series: pd.Series,
+    full: pd.DatetimeIndex,
+    weather: pd.DataFrame | None,
+    issue_hour: int,
+    lags: tuple[int, ...],
+    *,
+    dropna: bool = True,
+) -> tuple[pd.DataFrame, pd.Series]:
+    """The shared construction, so a future day gets identical columns.
+
+    Shared rather than copied: the failure mode of two feature builders is
+    a model fitted on one column order and served from another, which does
+    not raise -- it just returns confident nonsense.
+    """
     series = series.reindex(full)
 
     specs = [FeatureSpec(f"lag_{hours}h", hours) for hours in lags]
@@ -200,6 +324,12 @@ def build_features(
 
     if weather is not None and not weather.empty:
         features = features.join(_weather_features(weather, full))
+
+    if not dropna:
+        # The future path: no target exists, and nothing may be dropped,
+        # because the caller needs to see which columns are short rather
+        # than receive a silently truncated day.
+        return features, pd.Series(dtype=float)
 
     target_series = series.rename("load")
     frame = features.join(target_series)

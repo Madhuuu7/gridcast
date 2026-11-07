@@ -246,3 +246,25 @@ def test_the_console_handles_a_live_forecast(client, forecast, tmp_path):
         capture_output=True, text=True, cwd=ROOT, timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@needs_data
+def test_the_calibration_window_fills_even_where_the_archive_is_thin():
+    """Measured in days, this window collapsed wherever the data was sparse.
+
+    The August-September 2026 gap left a 45-day window holding 1,397 of its
+    4,320 blocks -- 14 per block group against a Mondrian minimum of 20 --
+    so every group fell back to the pooled quantile and the per-block
+    method silently became split conformal. Nothing raised; the bands just
+    stopped varying. Counting rows instead makes a thin stretch reach
+    further back in time rather than hold less data.
+    """
+    from gridcast.api.app import ForecastService
+
+    service = ForecastService(CACHE)
+    service.warm()
+    if not service.ready:
+        pytest.skip(service.error or "service not ready")
+    assert service.cal_n >= 4000
+    assert service.methods["mondrian conformal"].small_groups_ == []
+    assert service.cal_from < service.serve_from

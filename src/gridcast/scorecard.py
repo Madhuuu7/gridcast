@@ -89,9 +89,14 @@ class Record:
         """
         scored = self.scored_blocks
         if not scored:
+            # Days issued but not yet settled still count as days. Reporting
+            # zero here hid a forecast that had been published and was
+            # waiting for its outcome, which is precisely the state the
+            # record spends most of its life in.
             return {
-                "days": 0, "blocks": 0, "coverage": None, "coverage_se": None,
-                "mae_mw": None, "rupees": 0.0, "nominal": None,
+                "days": len(self.days), "blocks": 0, "coverage": None,
+                "coverage_se": None, "mae_mw": None, "rupees": 0.0,
+                "unbounded_blocks": 0,
             }
         covered = sum(
             (day.coverage or 0.0) * day.scored for day in self.days if day.coverage is not None
