@@ -27,36 +27,43 @@ nobody arranged.
 
 ## The numbers
 
-From `python scripts/backtest.py` — 8 folds spread across three years, 32,340
+From `python scripts/backtest.py` — 8 folds spread across three years, 32,391
 out-of-sample blocks, 90% nominal coverage.
 
 ### Point forecast
 
 | model | MAPE | MAE | skill vs naive |
 |---|---|---|---|
-| seasonal naive (last 3 same weekdays) | 12.34% | 523 MW | — |
-| ridge, closed form | 6.66% | 311 MW | +39% |
-| histogram gradient boosting | **5.42%** | **251 MW** | **+52%** |
+| seasonal naive (last 3 same weekdays) | 11.84% | 476 MW | — |
+| ridge, closed form | 6.42% | 270 MW | +43% |
+| histogram gradient boosting | **5.07%** | **233 MW** | **+51%** |
 
 ### Intervals: marginal
 
 | method | coverage | mean width | Winkler ↓ |
 |---|---|---|---|
-| **adaptive conformal** *(online)* | 90.1% | **924 MW** | **1067** |
-| mondrian-adaptive *(online)* | 91.4% | 1086 MW | 1311 |
-| **localized conformal** | 90.5% | **1214 MW** | **1547** |
-| gaussian (±1.645σ) | **88.6%** | 1088 MW | 1597 |
-| mondrian conformal | 90.6% | 1272 MW | 1604 |
-| split conformal | 90.6% | 1327 MW | 1710 |
-| normalized conformal | 91.1% | 1470 MW | 1788 |
+| **adaptive conformal** *(online)* | 90.1% | **860 MW** | **1007** |
+| mondrian-adaptive *(online)* | 91.8% | 1012 MW | 1206 |
+| gaussian (±1.645σ) | 90.9% | 1104 MW | 1482 |
+| **localized conformal** | 92.1% | **1250 MW** | **1492** |
+| mondrian conformal | 92.4% | 1274 MW | 1507 |
+| split conformal | 92.9% | 1335 MW | 1577 |
+| normalized conformal | 94.4% | 1405 MW | 1609 |
 
 Winkler charges the width and penalises misses, so neither an absurdly wide
 interval nor an absurdly sharp one wins it by cheating.
 
-The two methods above localized conformal are online — they update on the
-outcome of every block as it lands. Among the methods that fit once and then
-answer, the kernel is the best here by 50 Winkler, and the next section is
-why.
+The two online methods at the top update on the outcome of every block as it
+lands, which is a different and easier problem. Among the offline methods the
+kernel and the Gaussian are within 10 Winkler of each other — and the
+Gaussian is there by luck of the window rather than by construction. On the
+previous data cut it sat at 88.6% coverage and 1597 Winkler, well behind;
+nothing about `±1.645σ` changed, the fortnight of extra data did. The
+conformal methods all over-cover on this window instead, which is the failure
+direction that costs width rather than credibility.
+
+Marginal coverage is also the easy test. The next section is the one that
+separates them.
 
 ### Intervals: conditional — where they come apart
 
@@ -68,14 +75,14 @@ in every group**, because with 96 groups a spread of 0.10 happens by chance.
 
 | method | by block of day | by month | by day kind |
 |---|---|---|---|
-| gaussian | 0.220 (worst block 74.9%) | 0.274 (worst month 72.6%) | 0.164 |
-| split conformal | 0.181 | 0.230 | 0.167 |
-| normalized conformal | 0.107 | 0.255 | 0.231 |
-| mondrian conformal | 0.106 | 0.235 | 0.189 |
-| adaptive conformal | 0.176 | **0.048 — within noise** | 0.070 |
-| mondrian-adaptive | 0.138 | 0.135 | 0.239 |
-| **localized conformal** | **0.073 — within noise** | 0.229 | **0.100** |
-| *noise floor (p95)* | *0.101* | *0.058* | *0.022* |
+| gaussian | 0.163 | 0.218 | 0.168 |
+| split conformal | 0.123 | 0.189 | 0.175 |
+| normalized conformal | **0.067 — within noise** | 0.164 | 0.175 |
+| mondrian conformal | **0.068 — within noise** | 0.198 | 0.180 |
+| adaptive conformal | 0.171 | **0.041 — within noise** | 0.061 |
+| mondrian-adaptive | 0.110 | 0.099 | 0.261 |
+| **localized conformal** | **0.065 — within noise** | 0.216 | **0.112** |
+| *noise floor (p95)* | *0.101* | *0.056* | *0.024* |
 
 **Each partition fixes the axis it partitions on, and no other.** Mondrian and
 normalized conformal pull time-of-day coverage close to the noise floor and
@@ -91,11 +98,17 @@ measured compromise, not a win.
 This is structural rather than a tuning accident: **a partition conditions on
 one variable because a partition is a function of one variable.** A kernel is
 not. Weighting calibration residuals by similarity across time of day, day
-kind and temperature at once gives `localized conformal` the only block-of-day
-spread here that its own null cannot distinguish from perfect (0.073 against a
-0.101 floor, p = 0.81), while also being the best offline method on day kind —
-the axis the previous version of this README called the obvious next thing to
-build.
+kind and temperature at once lets one estimator work on more than one axis,
+and that shows up as the only row in the table that is good in two columns:
+`localized conformal` is inside the noise floor on block of day (0.065
+against 0.101) *and* the best offline method on day kind (0.112, against
+0.168 for the next one).
+
+Three methods reach the noise floor on block of day — Mondrian and normalized
+conformal get there too, which is exactly what conditioning on time of day is
+supposed to do. What neither of them does is anything for day kind: 0.180 and
+0.175, no better than ignoring the question. Being good on one axis is
+available to any partition. Being good on two is what the kernel buys.
 
 **It does nothing at all for the seasons**, and that is the honest shape of
 the result. 0.229 against split conformal's 0.230. A kernel borrows strength
@@ -104,7 +117,7 @@ from calibration data that exists, and next season's weather is not in a
 window tracks a season it has never seen.
 
 **Day type is still not solved, only improved.** The worst day-kind group goes
-from 76.8% under split conformal to 82.5%, against a 90% claim and a 0.022
+from 76.9% under split conformal to 82.1%, against a 90% claim and a 0.024
 noise floor. Diwali remains the day the model is most wrong about.
 
 ### How fast should an online method adapt?
@@ -134,31 +147,31 @@ thousand.
 
 | block | °C | kind | coverage | width | Winkler ↓ | block spread | day-kind spread | ESS |
 |---|---|---|---|---|---|---|---|---|
-| flat | flat | 1.00 | 90.6% | 1327 | 1710 | 0.181 | 0.167 | 5173 |
-| 8 | flat | 1.00 | 90.3% | 1284 | 1649 | 0.111 | 0.186 | 1534 |
-| flat | 5 | 1.00 | 91.1% | 1303 | 1675 | 0.170 | 0.161 | 3661 |
-| flat | flat | 0.05 | 90.6% | 1314 | 1681 | 0.180 | 0.082 | 2741 |
-| flat | flat | 0.00 | 90.7% | 1315 | 1670 | 0.187 | **0.051** | 2312 |
-| 8 | 5 | 0.05 | 90.8% | 1241 | 1567 | 0.112 | 0.076 | 650 |
-| **4** | **3** | **0.05** | 90.5% | **1214** | **1547** | **0.073** | 0.100 | 241 |
-| 2 | 2 | 0.05 | 90.7% | 1244 | 1577 | 0.099 | 0.098 | 85 |
-| 1 | 1 | 0.02 | 90.7% | 1295 | 1654 | 0.132 | 0.161 | 21 |
+| flat | flat | 1.00 | 92.9% | 1335 | 1577 | 0.123 | 0.175 | 5074 |
+| 8 | flat | 1.00 | 92.5% | 1291 | 1524 | 0.072 | 0.179 | 1505 |
+| flat | 5 | 1.00 | 93.2% | 1348 | 1583 | 0.125 | 0.181 | 3475 |
+| flat | flat | 0.05 | 92.8% | 1320 | 1555 | 0.144 | 0.091 | 2698 |
+| flat | flat | 0.00 | 92.8% | 1317 | 1553 | 0.141 | **0.055** | 2302 |
+| 8 | 5 | 0.05 | 92.6% | 1273 | 1496 | 0.081 | 0.097 | 616 |
+| **4** | **3** | **0.05** | 92.1% | **1250** | **1492** | **0.065** | 0.112 | 219 |
+| 2 | 2 | 0.05 | 92.5% | 1261 | 1501 | 0.066 | 0.113 | 77 |
+| 1 | 1 | 0.02 | 92.8% | 1297 | 1536 | 0.074 | 0.173 | 19 |
 
 The first row is the check that matters: **a flat kernel reproduces split
-conformal exactly** — 90.6%, 1327 MW, 1710 — every digit of the row in the
+conformal exactly** — 92.9%, 1335 MW, 1577 — every digit of the row in the
 marginal table above. The two are one estimator at two bandwidths, not two
 methods that happen to agree, and that is what licenses reading the rest of
 the table as a single tuning surface.
 
 Each axis moves only its own column. Narrowing the block bandwidth alone
-takes block spread from 0.181 to 0.111 and makes day kind slightly *worse*;
-lowering the day-kind weight alone takes day kind from 0.167 to 0.082 and
-leaves block spread at 0.180.
+takes block spread from 0.123 to 0.072 and makes day kind slightly *worse*;
+lowering the day-kind weight alone takes day kind from 0.175 to 0.091 and
+leaves block spread at 0.144.
 
 **The optimum is interior, and the ESS column is why.** Winkler bottoms out
-at 1547 with about 241 effective residuals per interval, and then rises again
+at 1492 with about 219 effective residuals per interval, and then rises again
 — not because sharper conditioning is wrong, but because a quantile drawn
-from 21 residuals is noise wearing the authority of ten thousand. Conditional
+from 19 residuals is noise wearing the authority of ten thousand. Conditional
 coverage keeps looking like it is improving on the way down, and the spread
 column alone never says when the data ran out. That is the trap this column
 exists to make visible.
@@ -175,16 +188,16 @@ error**, +0.15 °C bias, and a 95th percentile of 5.0 °C.
 
 | weather at fit time | MAPE | MAE | coverage | width | Winkler |
 |---|---|---|---|---|---|
-| the analysis | 5.12% | 234 MW | 91.7% | 1249 | 1499 |
-| a lead-2 forecast | 5.57% | 258 MW | 90.9% | 1372 | 1722 |
+| the analysis | 5.07% | 233 MW | 92.1% | 1250 | 1492 |
+| a lead-2 forecast | 5.49% | 256 MW | 91.3% | 1363 | 1630 |
 
-**0.44 MAPE points, 9% worse.** That is the size of the advantage every other
+**0.42 MAPE points, 8% worse.** That is the size of the advantage every other
 figure in this README is getting, and the gap between these numbers and a
 production system's.
 
 The more interesting half is the coverage column. The point forecast degrades
-and **the interval absorbs it**: coverage stays at 90.9% against a 90% claim
-while the band widens 10%. The conformal quantile is computed from residuals
+and **the interval absorbs it**: coverage holds at 91.3% against a 90% claim
+while the band widens 9%. The conformal quantile is computed from residuals
 that already contain the weather error, so it prices in an uncertainty nobody
 told it about. A Gaussian interval fitted to the same residuals would do this
 too; what it would not do is stay calibrated, since the extra error is not
@@ -194,12 +207,12 @@ Gaussian either.
 
 | | MAPE |
 |---|---|
-| causal features only | 6.46% |
-| plus a 24-hour lag | **5.98%** |
+| causal features only | 5.17% |
+| plus a 24-hour lag | **4.59%** |
 
 A 24-hour lag is the first feature every load-forecasting tutorial reaches
 for. At a 10:00 gate it is observable for tomorrow's *morning* blocks and
-still in the future for its afternoon ones. It buys an 8% apparent
+still in the future for its afternoon ones. It buys an 11% apparent
 improvement, entirely fictional, and **nothing in the backtest output says
 anything is wrong** — a leaky model simply looks better.
 
@@ -248,6 +261,14 @@ every method is worst on. It widened its band from 777 MW to 2,819 MW across
 the day and forecast a mean of 3,014 MW against a recent weekday's 3,600.
 Whether that was right is on the ledger either way.
 
+A ledger that grows one row a day starts at one row, so the console also
+replays the same pipeline across the whole out-of-sample window and scores
+it the same way — **41 days, 3,822 blocks, 96.2% coverage, 191 MW MAE**. That
+is shown separately and labelled, because it was computed after the fact and
+the one-row table was not. It is the right number to read for how the system
+performs; the issued table is the right one to read for whether it can be
+trusted.
+
 ## Forecast error in rupees
 
 MAE in MW is the right unit for comparing methods and the wrong one for
@@ -283,7 +304,7 @@ Both sources are free, key-less and real.
 
 **Delhi SLDC** (`delhisldc.org`) publishes 288 five-minute readings a day for
 the Delhi total and its five discoms — BRPL, BYPL, NDPL, NDMC and MES. Fetched
-back to October 2023: 1,083 days, 101,660 fifteen-minute blocks, 97.8% of the
+back to October 2023: 1,095 days, 102,753 fifteen-minute blocks, 97.7% of the
 slots that should exist, load from 1,458 to 8,680 MW. The 2026 peak was on
 29 June.
 
@@ -298,10 +319,13 @@ downstream if made wrong:
   Delhi never draws less than ~1,400 MW. Taken at face value it would teach a
   model that demand sometimes collapses to nothing.
 - **A day can be short.** Gaps stay explicit instead of being reindexed into
-  invented values. 13 days of the 1,096 are missing from the archive entirely —
+  invented values. 13 days of the 1,097 are missing from the archive entirely —
   not a fetch failure, they are simply not published — and they cluster in
   August–September 2026, which is why the backtest folds are spread across the
   whole record rather than stacked at the end.
+- **A day can also lie.** Two days came back with one reading repeated in all
+  286 rows, which parses cleanly and is entirely false. A day with a single
+  distinct value is treated as unpublished, like an absent one.
 - **The discoms do not sum to the total.** Separate meters, off by ~45 MW on an
   average day. The total is what gets forecast.
 
@@ -315,7 +339,7 @@ pip install -e ".[dev]"
 
 python scripts/fetch_data.py        # ~7 minutes, resumable, cached per day
 alembic upgrade head                # SQLite locally, Postgres on DATABASE_URL
-pytest                              # 180 tests
+pytest                              # 185 tests
 python scripts/backtest.py          # the study above, ~15 minutes
 
 npm --prefix web install            # the console

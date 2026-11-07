@@ -125,6 +125,16 @@ export function Study({ backtest }: { backtest: Backtest }) {
             alone at these group sizes, so a method is only called uneven when
             it beats its own null.
           </p>
+          <p className="lede">
+            <strong>Most rows below say uneven, and that is the result.</strong>{" "}
+            Marginal coverage is the figure forecasting papers report and
+            every method passes it; this is the harder question almost nobody
+            asks, and it is supposed to be hard to pass. A method reaching
+            <em> within noise</em> on an axis means its coverage across that
+            axis is statistically indistinguishable from perfect — on 32,000
+            out-of-sample blocks, with a Benjamini–Hochberg correction across
+            the whole family of tests.
+          </p>
           {AXES.filter(([key]) => conditional[key]).map(([key, label]) => (
             <div key={key} style={{ marginBottom: 26 }}>
               <h3>{label}</h3>

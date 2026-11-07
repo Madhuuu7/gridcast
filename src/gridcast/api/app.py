@@ -32,6 +32,7 @@ page can quote measured coverage rather than nominal coverage.
 from __future__ import annotations
 
 import json
+import math
 from contextlib import asynccontextmanager
 import logging
 import os
@@ -464,6 +465,95 @@ def create_app(cache: Path | str = "data/raw") -> FastAPI:
         except Exception as exc:  # the desk degrades rather than 500s
             log.warning("schedule unavailable: %s", exc)
             return {"issued": False, "reason": str(exc)}
+
+    @app.get("/api/record/replay")
+    def replayed_record(method: str = Query("localized conformal")) -> dict[str, Any]:
+        """The same ledger, run over every out-of-sample day at once.
+
+        The live record is written one row a day and cannot be backfilled --
+        the store refuses a forecast issued after its target day began, which
+        is what makes it worth reading. That is correct and it also means a
+        new deployment has one row.
+
+        So this replays the identical pipeline across the servable window and
+        scores each day the same way. It is **not** the live record and is
+        labelled as such wherever it appears: these forecasts were computed
+        now, from a model that was fitted before the window but not issued in
+        advance. What it is good for is seeing the shape of a month of
+        operation on day one, and the per-day numbers are real out-of-sample
+        numbers either way.
+        """
+        from ..settlement import DeviationSettlement
+
+        if not service.ready:
+            raise HTTPException(status_code=503, detail=service.error or "not warm")
+
+        settlement = DeviationSettlement()
+        index = pd.DatetimeIndex(service.X.index).normalize()
+        days = sorted({d.date() for d in index if d.date() >= service.serve_from})
+
+        rows: list[dict[str, Any]] = []
+        covered = scored = 0
+        weighted_mae = 0.0
+        rupees = 0.0
+        for day in days:
+            try:
+                body = service.forecast(day)
+            except HTTPException:
+                continue
+            band = body["intervals"].get(method)
+            if band is None:
+                continue
+            actual = np.asarray(body["actual"], dtype=float)
+            point = np.asarray(body["point"], dtype=float)
+            lower = np.array(
+                [np.nan if v is None else v for v in band["lower"]], dtype=float
+            )
+            upper = np.array(
+                [np.nan if v is None else v for v in band["upper"]], dtype=float
+            )
+            usable = np.isfinite(lower) & np.isfinite(upper)
+            inside = usable & (actual >= lower) & (actual <= upper)
+            n = int(usable.sum())
+            charge = float(np.nansum(settlement.charge(point, actual)))
+            covered += int(inside.sum())
+            scored += n
+            weighted_mae += body["metrics"]["mae"] * n
+            rupees += charge
+            rows.append(
+                {
+                    "target_date": body["date"],
+                    "method": method,
+                    "day_kind": body["day_kind"],
+                    "holiday": body["holiday"],
+                    "scored": n,
+                    "unbounded": int((~usable).sum()),
+                    "coverage": float(inside.sum() / n) if n else None,
+                    "mae_mw": body["metrics"]["mae"],
+                    "mape": body["metrics"]["mape"],
+                    "mean_width_mw": band["mean_width"],
+                    "rupees": charge,
+                }
+            )
+
+        se = None
+        if scored:
+            p = covered / scored
+            se = float(1.96 * math.sqrt(max(p * (1 - p), 0.0) / scored))
+        return {
+            "replayed": True,
+            "method": method,
+            "window": {"from": str(service.serve_from), "to": str(service.data_end)},
+            "totals": {
+                "days": len(rows),
+                "blocks": scored,
+                "coverage": (covered / scored) if scored else None,
+                "coverage_se": se,
+                "mae_mw": (weighted_mae / scored) if scored else None,
+                "rupees": rupees,
+            },
+            "days": rows,
+        }
 
     @app.get("/api/record")
     def record() -> dict[str, Any]:

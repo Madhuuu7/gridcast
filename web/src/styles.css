@@ -520,12 +520,17 @@ tbody tr:hover td {
   font-weight: 600;
 }
 
+/* "within noise" is the hard thing to achieve, so it is the one that gets
+ * emphasis. "uneven" is the expected outcome of a strict test and is set
+ * in ordinary ink -- in red it read as a wall of failures rather than as
+ * the result the section is reporting. */
 .verdict-noise {
   color: var(--cool);
+  font-weight: 600;
 }
 
 .verdict-uneven {
-  color: var(--miss);
+  color: var(--ink-faint);
 }
 
 .pending {
