@@ -124,6 +124,95 @@ def conformal_quantile(
     return float(np.partition(clean, rank - 1)[rank - 1])
 
 
+def weighted_conformal_quantile(
+    scores: np.ndarray,
+    weights: np.ndarray,
+    alpha: float,
+    *,
+    w_test: float = 1.0,
+    fallback: str = "inf",
+) -> float:
+    """The conformal quantile when calibration points are not equally relevant.
+
+    ``conformal_quantile`` treats every calibration residual as equally
+    informative about the next one. That is the exchangeability assumption,
+    and it is what forces the choice this project keeps running into: pool
+    everything and get marginal coverage, or partition and get conditional
+    coverage on exactly one axis at the price of splitting the data.
+
+    Weighting is the way out of the dichotomy. Give calibration point ``i`` a
+    weight ``w_i`` reflecting how much its covariates resemble the point being
+    predicted, normalise over the weights *including the test point's own*,
+    and take the smallest score whose cumulative weight reaches ``1 - alpha``
+    (Tibshirani et al., 2019):
+
+        p_i = w_i / (sum_j w_j + w_test)
+
+    The test point has to be in the denominator. Leaving it out is the
+    weighted version of using ``np.quantile`` instead of the
+    ``ceil((n+1)(1-alpha))``-th order statistic -- it reliably under-covers,
+    and by most at the small effective sample sizes that weighting creates.
+
+    The two familiar cases fall out of this one:
+
+    - **Uniform weights** with ``w_test = 1`` give ``p_i = 1/(n+1)``, so the
+      threshold is crossed at the ``ceil((n+1)(1-alpha))``-th smallest score.
+      That is ``conformal_quantile`` exactly, and a test pins it.
+    - **Indicator weights** -- 1 inside a group, 0 outside -- give the
+      per-group quantile, which is ``MondrianConformal``.
+
+    So the hard partition is not a different method, it is this one at a
+    degenerate bandwidth, and everything between them is available.
+
+    **Effective sample size is the thing to watch.** The guarantee needs
+    ``sum_j w_j >= w_test * (1 - alpha) / alpha`` -- at 90% coverage, nine
+    test-point-equivalents of weight. Sharpen the kernel far enough and the
+    weights concentrate on a handful of neighbours, the sum falls below that,
+    and no finite score supports the claim. The honest answer there is an
+    infinite interval, and callers who would rather have a usable number ask
+    for ``fallback="max"`` knowingly.
+    """
+    scores = np.asarray(scores, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    if scores.shape != weights.shape:
+        raise ValueError(
+            f"scores and weights must align, got {scores.shape} and {weights.shape}"
+        )
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+    if w_test <= 0.0:
+        raise ValueError(f"w_test must be positive, got {w_test}")
+    keep = np.isfinite(scores) & np.isfinite(weights) & (weights > 0.0)
+    scores, weights = scores[keep], weights[keep]
+    if scores.size == 0:
+        return float("inf")
+
+    order = np.argsort(scores, kind="stable")
+    scores, weights = scores[order], weights[order]
+    total = float(weights.sum()) + w_test
+    reached = np.cumsum(weights) / total >= (1.0 - alpha)
+    if not reached.any():
+        return float(scores.max()) if fallback == "max" else float("inf")
+    return float(scores[int(np.argmax(reached))])
+
+
+def effective_sample_size(weights: np.ndarray) -> float:
+    """Kish's effective sample size: ``(sum w)^2 / sum w^2``.
+
+    How many equally-weighted points the weighting is worth. A kernel narrow
+    enough to isolate the evening ramp of festival days may leave an ESS of
+    four, and four residuals cannot support a 90% claim however many rows sat
+    in the calibration window. Reported rather than inferred, because the raw
+    weight sum hides it: a thousand points at weight 0.01 and ten at 1.0 both
+    sum to ten, and only one of them is ten points' worth of information.
+    """
+    weights = np.asarray(weights, dtype=float)
+    weights = weights[np.isfinite(weights) & (weights > 0.0)]
+    if weights.size == 0:
+        return 0.0
+    return float(weights.sum() ** 2 / np.square(weights).sum())
+
+
 def coverage(actual: np.ndarray, lower: np.ndarray, upper: np.ndarray) -> float:
     actual = np.asarray(actual, dtype=float)
     if actual.size == 0:
@@ -343,6 +432,243 @@ class MondrianConformal:
         radius = np.array(
             [self.q_.get(key, self.pooled_) for key in np.asarray(groups)], dtype=float
         )
+        return Intervals(self.name, self.alpha, point - radius, point + radius, radius)
+
+
+#: Scheduling blocks in a day. Defined here rather than imported from
+#: ``data`` so the interval machinery stays independent of the dataset layer.
+BLOCKS_PER_DAY = 96
+
+
+@dataclass(frozen=True)
+class BlockCovariates:
+    """What makes two scheduling blocks comparable.
+
+    Three axes, chosen because the backtest measured a method failing on each
+    of them: time of day (the evening ramp errs several times harder than
+    4am), day kind (every method here is worst on festivals), and temperature
+    (the error scales with cooling load).
+
+    Temperature is optional and allowed to be missing per row. A block with
+    no weather still gets compared on the other two axes rather than being
+    dropped -- the 13 days absent from the SLDC archive already cost enough
+    data without discarding more.
+    """
+
+    block: np.ndarray
+    day_kind: np.ndarray
+    temperature: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        block = np.asarray(self.block, dtype=int)
+        kind = np.asarray(self.day_kind)
+        if block.shape != kind.shape:
+            raise ValueError(
+                f"block and day_kind must align, got {block.shape} and {kind.shape}"
+            )
+        temp = self.temperature
+        if temp is not None:
+            temp = np.asarray(temp, dtype=float)
+            if temp.shape != block.shape:
+                raise ValueError(
+                    f"temperature must align with block, got {temp.shape} "
+                    f"and {block.shape}"
+                )
+        object.__setattr__(self, "block", block)
+        object.__setattr__(self, "day_kind", kind)
+        object.__setattr__(self, "temperature", temp)
+
+    def __len__(self) -> int:
+        return int(self.block.size)
+
+    def take(self, mask: np.ndarray) -> "BlockCovariates":
+        temp = None if self.temperature is None else self.temperature[mask]
+        return BlockCovariates(self.block[mask], self.day_kind[mask], temp)
+
+
+@dataclass
+class CovariateKernel:
+    """How much one block's residual says about another's.
+
+    A product of three factors, one per axis, each in ``(0, 1]``:
+
+    - **Time of day**, Gaussian in the *circular* block distance. 23:45 and
+      00:00 are adjacent blocks on a grid, and a kernel that calls them 95
+      blocks apart learns that midnight is unlike itself.
+    - **Day kind**, a flat multiplier on mismatch. ``kind_penalty = 0`` is a
+      hard partition -- Mondrian on day kind -- and ``1`` ignores day kind
+      entirely. Between them the rare groups borrow strength from the common
+      ones instead of falling off a cliff at ``min_group``, which is the
+      whole reason this exists: three years hold about thirty holidays, and
+      a calibration window holds two or three.
+    - **Temperature**, Gaussian in degrees, and ``1.0`` when either side is
+      missing, so a block without weather is neither favoured nor excluded.
+
+    The bandwidths are the tuning surface, exactly as ``gamma`` is for the
+    adaptive method, and ``scripts/backtest.py`` sweeps them rather than
+    asserting a choice. Narrow is not free: every sharpening cuts the
+    effective sample size, and below ``(1-alpha)/alpha`` of it no finite
+    interval is supportable at all.
+    """
+
+    block_bandwidth: float = 8.0
+    temp_bandwidth: float = 5.0
+    kind_penalty: float = 0.05
+    name: str = "kernel"
+
+    def __post_init__(self) -> None:
+        if self.block_bandwidth <= 0 or self.temp_bandwidth <= 0:
+            raise ValueError("bandwidths must be positive")
+        if not 0.0 <= self.kind_penalty <= 1.0:
+            raise ValueError(
+                f"kind_penalty is a weight multiplier in [0, 1], got "
+                f"{self.kind_penalty}"
+            )
+
+    def between(self, test: BlockCovariates, cal: BlockCovariates) -> np.ndarray:
+        """Weight matrix of shape ``(len(test), len(cal))``."""
+        gap = np.abs(test.block[:, None] - cal.block[None, :])
+        circular = np.minimum(gap, BLOCKS_PER_DAY - gap)
+        weights = np.exp(-0.5 * np.square(circular / self.block_bandwidth))
+
+        same_kind = test.day_kind[:, None] == cal.day_kind[None, :]
+        weights = weights * np.where(same_kind, 1.0, self.kind_penalty)
+
+        if test.temperature is not None and cal.temperature is not None:
+            delta = test.temperature[:, None] - cal.temperature[None, :]
+            known = np.isfinite(delta)
+            thermal = np.where(
+                known, np.exp(-0.5 * np.square(delta / self.temp_bandwidth)), 1.0
+            )
+            weights = weights * thermal
+        return weights
+
+
+@dataclass
+class LocalizedConformal:
+    """Conformal with a kernel over covariates instead of a partition.
+
+    The finding this project exists to report is that every method here fixes
+    the axis it conditions on and leaves the others alone: Mondrian flattens
+    coverage across time of day and does nothing for the seasons, adaptive
+    conformal does the reverse, and running both at once halves each and
+    fixes neither. That is not a coincidence of tuning. A partition
+    conditions on one variable because a partition is a function of one
+    variable.
+
+    A kernel is not. Weighting calibration residuals by similarity across
+    time of day, day kind and temperature at once asks for coverage
+    conditional on the covariate vector rather than on a chosen slice of it
+    (Guan, 2023; weighted conformal from Tibshirani et al., 2019). Mondrian
+    is the special case where the kernel is an indicator, so the comparison
+    is between two settings of one estimator rather than between two
+    different programs.
+
+    **What it gives up.** Exact finite-sample marginal coverage. Weighted
+    conformal's guarantee holds when the weights come from a known covariate
+    shift; here they encode a similarity judgement instead, so the coverage
+    claim is empirical and the backtest is the evidence. That is the same
+    trade ``AdaptiveConformal`` makes, and it is stated for the same reason.
+
+    **Where it breaks.** Sharpen every bandwidth and the weight concentrates
+    on a few neighbours, the effective sample size collapses, and the
+    quantile is drawn from four residuals wearing the authority of ten
+    thousand. ``ess_`` records the realised effective sample size per
+    prediction and ``starved_`` counts the points whose weight sum fell below
+    what the level needs, because a method that quietly runs out of data is
+    worse than one that says so.
+    """
+
+    alpha: float = 0.1
+    kernel: CovariateKernel = field(default_factory=CovariateKernel)
+    name: str = "localized conformal"
+    #: Rows per matrix chunk. 256 x 10,000 doubles is 20 MB; the whole
+    #: product would be gigabytes on a laptop with 16 GB and no headroom.
+    chunk: int = 256
+    scores_: np.ndarray = field(default_factory=lambda: np.empty(0), repr=False)
+    cal_: "BlockCovariates | None" = field(default=None, repr=False)
+    ess_: np.ndarray = field(default_factory=lambda: np.empty(0), repr=False)
+    starved_: int = 0
+    pooled_: float = float("inf")
+
+    def fit(
+        self,
+        residuals: np.ndarray,
+        *,
+        covariates: "BlockCovariates | None" = None,
+        **_: object,
+    ) -> "LocalizedConformal":
+        if covariates is None:
+            raise ValueError("localized conformal needs calibration covariates")
+        scores = np.abs(np.asarray(residuals, dtype=float))
+        if scores.size != len(covariates):
+            raise ValueError(
+                f"residuals and covariates must align, got {scores.size} and "
+                f"{len(covariates)}"
+            )
+        keep = np.isfinite(scores)
+        self.scores_ = scores[keep]
+        self.cal_ = covariates.take(keep)
+        # The pooled quantile is the fallback for a test point the kernel
+        # finds nothing near, and the honest comparator: if localized never
+        # beats it, the weighting bought nothing.
+        self.pooled_ = conformal_quantile(self.scores_, self.alpha)
+        return self
+
+    def predict(
+        self,
+        point: np.ndarray,
+        *,
+        covariates: "BlockCovariates | None" = None,
+        **_: object,
+    ) -> Intervals:
+        if covariates is None:
+            raise ValueError("localized conformal needs test covariates")
+        if self.cal_ is None:
+            raise ValueError("fit before predict")
+        point = np.asarray(point, dtype=float)
+        if point.size != len(covariates):
+            raise ValueError(
+                f"point and covariates must align, got {point.size} and "
+                f"{len(covariates)}"
+            )
+
+        # Sorted once: the scores do not change between test points, only the
+        # weights attached to them, so each chunk reorders weights into this
+        # order and cumulates rather than sorting n_test times.
+        order = np.argsort(self.scores_, kind="stable")
+        sorted_scores = self.scores_[order]
+        target = 1.0 - self.alpha
+        # The kernel's own maximum: a test point identical to a calibration
+        # point scores 1.0, so that is the weight the test point carries in
+        # its own normalisation.
+        w_test = 1.0
+
+        radius = np.empty(point.size)
+        ess = np.empty(point.size)
+        starved = 0
+        for start in range(0, point.size, self.chunk):
+            stop = min(start + self.chunk, point.size)
+            block = covariates.take(np.arange(start, stop))
+            weights = self.kernel.between(block, self.cal_)[:, order]
+            totals = weights.sum(axis=1)
+            ess[start:stop] = np.where(
+                totals > 0.0,
+                np.square(totals) / np.maximum(np.square(weights).sum(axis=1), 1e-300),
+                0.0,
+            )
+            cumulative = np.cumsum(weights, axis=1) / (totals + w_test)[:, None]
+            reached = cumulative >= target
+            any_reached = reached.any(axis=1)
+            first = np.argmax(reached, axis=1)
+            radius[start:stop] = np.where(
+                any_reached,
+                sorted_scores[np.minimum(first, sorted_scores.size - 1)],
+                self.pooled_,
+            )
+            starved += int((~any_reached).sum())
+        self.ess_ = ess
+        self.starved_ = starved
         return Intervals(self.name, self.alpha, point - radius, point + radius, radius)
 
 
