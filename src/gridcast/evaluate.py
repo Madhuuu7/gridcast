@@ -44,8 +44,11 @@ import pandas as pd
 
 from .conformal import (
     AdaptiveConformal,
+    BlockCovariates,
+    CovariateKernel,
     GaussianIntervals,
     Intervals,
+    LocalizedConformal,
     MondrianAdaptiveConformal,
     MondrianConformal,
     NormalizedConformal,
@@ -53,6 +56,7 @@ from .conformal import (
     conditional_coverage_gap,
     coverage_by_group,
 )
+from .data.calendar import day_kind
 from .data.dataset import block_of_day
 from .models import mae, mape, rmse, skill
 
@@ -206,6 +210,37 @@ class BacktestResult:
         )
 
 
+def day_kinds(index: pd.DatetimeIndex) -> np.ndarray:
+    """The kind of day each block belongs to.
+
+    Computed once per distinct date rather than once per block: three years
+    of blocks is 101,660 calls into the holiday table for 1,083 answers, and
+    the lunar festival lookup is not free.
+    """
+    index = pd.DatetimeIndex(index)
+    dates = index.normalize()
+    lookup = {day: day_kind(day.date()) for day in dates.unique()}
+    return np.array([lookup[day] for day in dates], dtype=object)
+
+
+def _covariates(index: pd.DatetimeIndex, X: pd.DataFrame) -> BlockCovariates:
+    """The three axes the kernel compares blocks on.
+
+    Temperature comes from the feature frame rather than being refetched, so
+    the kernel sees exactly the weather the point model saw -- including its
+    gaps. ``build_features`` drops rows with no weather at all, but a
+    defensive ``None`` here keeps the backtest runnable on a dataset built
+    without the weather join, which is what the API's smallest smoke path
+    uses.
+    """
+    temperature = (
+        X["temperature_2m"].to_numpy(dtype=float)
+        if "temperature_2m" in X.columns
+        else None
+    )
+    return BlockCovariates(block_of_day(index), day_kinds(index), temperature)
+
+
 def _sigma_model(X: pd.DataFrame, residuals: np.ndarray):
     """A small model of the absolute residual: how hard is this block?
 
@@ -233,6 +268,7 @@ def run_backtest(
     folds: list[Fold] | None = None,
     baseline_factory=None,
     gamma: float = 0.02,
+    kernel: CovariateKernel | None = None,
     verbose: bool = True,
 ) -> BacktestResult:
     """Fit, calibrate and forecast over every fold; return every block."""
@@ -261,12 +297,15 @@ def run_backtest(
 
         cal_blocks = block_of_day(index[cal])
         test_blocks = block_of_day(index[test])
+        cal_cov = _covariates(index[cal], X[cal])
+        test_cov = _covariates(index[test], X[test])
 
         frame = pd.DataFrame(
             {
                 "actual": actual,
                 "predicted": test_pred,
                 "block": test_blocks,
+                "day_kind": test_cov.day_kind,
                 "fold": fold.index,
             },
             index=index[test],
@@ -300,6 +339,23 @@ def run_backtest(
             bands = normalized.predict(test_pred, sigma=sigma_test)
             frame[f"lower_{normalized.name}"] = bands.lower
             frame[f"upper_{normalized.name}"] = bands.upper
+
+        # The kernel version of the same quantile: one estimator conditioning
+        # on time of day, day kind and temperature together, where every
+        # method above conditions on at most one of them.
+        localized = LocalizedConformal(alpha, kernel=kernel or CovariateKernel())
+        bands = localized.fit(cal_resid, covariates=cal_cov).predict(
+            test_pred, covariates=test_cov
+        )
+        frame[f"lower_{localized.name}"] = bands.lower
+        frame[f"upper_{localized.name}"] = bands.upper
+        frame["localized_ess"] = localized.ess_
+        if verbose and localized.starved_:
+            print(
+                f"    localized: {localized.starved_:,} of {int(test.sum()):,} blocks "
+                f"had too little kernel weight and fell back to the pooled quantile",
+                flush=True,
+            )
 
         adaptive = AdaptiveConformal(alpha, gamma=gamma)
         bands = adaptive.run(actual, test_pred, cal_resid)

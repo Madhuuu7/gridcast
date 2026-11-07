@@ -34,8 +34,11 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from gridcast.conformal import conditional_coverage_gap  # noqa: E402
-from gridcast.data.calendar import coverage_warning, day_kind  # noqa: E402
+from gridcast.conformal import (  # noqa: E402
+    CovariateKernel,
+    conditional_coverage_gap,
+)
+from gridcast.data.calendar import coverage_warning  # noqa: E402
 from gridcast.data.dataset import (  # noqa: E402
     SAME_BLOCK_LAGS,
     build_features,
@@ -200,17 +203,14 @@ def study_conditional(result) -> dict:
     rule("5. conditional coverage: honest everywhere, or only on average?")
     frame = result.frame
     actual = frame["actual"].to_numpy()
-    frame = frame.assign(
-        kind=[day_kind(ts.date()) for ts in pd.DatetimeIndex(frame.index)]
-    )
 
-    # Eighteen tests -- six methods across three groupings -- so the
-    # p-values get a Benjamini-Hochberg correction before any of them is
-    # called significant. Uncorrected, at 0.05 each, the chance of at least
-    # one spurious "uneven" across a family this size is about 60%, and the
+    # One test per method per grouping, and the p-values get a
+    # Benjamini-Hochberg correction before any of them is called
+    # significant. Uncorrected, at 0.05 each, the chance of at least one
+    # spurious "uneven" across a family this size is well over half, and the
     # whole point of the noise floor was to stop reporting noise as a result.
     gaps: dict[tuple[str, str], dict] = {}
-    for by in ("block", "month", "kind"):
+    for by in ("block", "month", "day_kind"):
         for method in result.methods:
             gaps[(by, method)] = conditional_coverage_gap(
                 actual, result.intervals(method), frame[by].to_numpy()
@@ -229,7 +229,12 @@ def study_conditional(result) -> dict:
         gaps[key]["uneven_after_correction"] = bool(p_adj < 0.05)
 
     out: dict[str, dict] = {}
-    for by, label in (("block", "block of day"), ("month", "month"), ("kind", "day kind")):
+    print(f"\n  {len(keys)} tests in the family, Benjamini-Hochberg corrected.")
+    for by, label in (
+        ("block", "block of day"),
+        ("month", "month"),
+        ("day_kind", "day kind"),
+    ):
         print(f"\n  by {label}:")
         print(f"    {'method':22s} {'worst':>7s} {'spread':>8s} {'noise p95':>10s} "
               f"{'p (BH)':>8s}  verdict")
@@ -296,6 +301,55 @@ def study_gamma(X, y, folds, gammas) -> dict:
     return out
 
 
+def study_bandwidth(X, y, folds, settings) -> dict:
+    rule("7. how wide should the kernel be?")
+    print("  kind_penalty 0 is a hard partition on day kind; 1 ignores it.")
+    print("  ESS is Kish's effective sample size -- how many equally-weighted")
+    print("  residuals each interval actually rests on, against a calibration")
+    print("  window of several thousand.\n")
+    print(f"  {'blocks':>7s} {'degC':>7s} {'kind':>6s} {'coverage':>9s} {'width':>8s} "
+          f"{'Winkler':>9s} {'block':>7s} {'month':>7s} {'kind sp':>8s} {'ESS':>7s}")
+    out = {}
+    for block_bandwidth, temp_bandwidth, kind_penalty in settings:
+        kernel = CovariateKernel(
+            block_bandwidth=block_bandwidth,
+            temp_bandwidth=temp_bandwidth,
+            kind_penalty=kind_penalty,
+        )
+        result = run_backtest(
+            X, y, BoostedForecaster, alpha=ALPHA, folds=folds, kernel=kernel,
+            verbose=False,
+        )
+        intervals = result.intervals("localized conformal")
+        actual = result.frame["actual"].to_numpy()
+        marginal = intervals.evaluate(actual)
+        spreads = {
+            by: conditional_coverage_gap(
+                actual, intervals, result.frame[by].to_numpy()
+            )["spread"]
+            for by in ("block", "month", "day_kind")
+        }
+        ess = float(result.frame["localized_ess"].mean())
+        key = f"block={block_bandwidth},temp={temp_bandwidth},kind={kind_penalty}"
+        out[key] = {**marginal, **{f"{k}_spread": v for k, v in spreads.items()},
+                    "mean_ess": ess}
+        print(
+            f"  {block_bandwidth:7.0f} {temp_bandwidth:7.0f} {kind_penalty:6.2f} "
+            f"{marginal['coverage']:8.1%} {marginal['mean_width']:7.0f} "
+            f"{marginal['winkler']:9.0f} {spreads['block']:7.3f} "
+            f"{spreads['month']:7.3f} {spreads['day_kind']:8.3f} {ess:7.0f}"
+        )
+    print("\n  The two bandwidths trade against different axes, which is the")
+    print("  point of having both: narrowing the block bandwidth buys")
+    print("  time-of-day coverage, and lowering the day-kind penalty buys")
+    print("  festival coverage, and neither does the other's job. Watch the")
+    print("  ESS column for where the kernel runs out of data rather than")
+    print("  reading the spreads alone -- a sharp kernel's conditional")
+    print("  coverage improves right up until each interval rests on a")
+    print("  handful of residuals, and the spread does not say when.")
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--quick", action="store_true")
@@ -349,6 +403,31 @@ def main() -> int:
             else (0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.8)
         )
         results["gamma"] = study_gamma(X, y, folds, gammas)
+    if "7" not in skip:
+        FLAT = 1e9
+        settings = (
+            ((FLAT, FLAT, 1.00), (8.0, 5.0, 0.05))
+            if args.quick
+            else (
+                # Flat on every axis: must reproduce split conformal exactly,
+                # which is the check that the kernel path and the partition
+                # path are one estimator and not two implementations.
+                (FLAT, FLAT, 1.00),
+                # One axis at a time, so each column below is attributable.
+                (8.0, FLAT, 1.00),     # time of day only
+                (FLAT, 5.0, 1.00),     # temperature only
+                (FLAT, FLAT, 0.05),    # day kind only
+                (FLAT, FLAT, 0.00),    # day kind, hard partition
+                # Then together, tightening.
+                (16.0, 10.0, 0.30),
+                (8.0, 5.0, 0.30),
+                (8.0, 5.0, 0.05),
+                (4.0, 3.0, 0.05),
+                (2.0, 2.0, 0.05),
+                (1.0, 1.0, 0.02),      # sharp enough to start starving
+            )
+        )
+        results["bandwidth"] = study_bandwidth(X, y, folds, settings)
 
     results["elapsed_s"] = time.perf_counter() - started
     args.json.parent.mkdir(parents=True, exist_ok=True)

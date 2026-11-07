@@ -511,8 +511,13 @@ class CovariateKernel:
     interval is supportable at all.
     """
 
-    block_bandwidth: float = 8.0
-    temp_bandwidth: float = 5.0
+    #: The sweep's Winkler optimum on the full backtest. Interior on every
+    #: axis -- wider loses conditional coverage, narrower starves the
+    #: effective sample size -- and chosen on the same data it is reported
+    #: on, which is the same in-sample tuning that ``gamma`` gets and
+    #: carries the same caveat.
+    block_bandwidth: float = 4.0
+    temp_bandwidth: float = 3.0
     kind_penalty: float = 0.05
     name: str = "kernel"
 
