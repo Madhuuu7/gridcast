@@ -45,7 +45,7 @@ export function Record({ record }: { record: RecordBody }) {
   const [replay, setReplay] = useState<Replayed | null>(null);
 
   useEffect(() => {
-    load<Replayed>("/api/record/replay").then((r) => {
+    load<Replayed>("api/record/replay", "record-replay.json").then((r) => {
       if (r.state === "ready") setReplay(r.value);
     });
   }, []);

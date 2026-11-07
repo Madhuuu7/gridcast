@@ -11,8 +11,18 @@ import { ScheduleStrip, type StripBlock } from "../components/ScheduleStrip";
 import { load, type DayEntry, type Forecast } from "../lib/api";
 import { mw, percent } from "../lib/format";
 
+/** The one day a published build carries a forecast for. Picking a
+ *  different date on a static page has no answer, and the view says that
+ *  rather than silently showing this one. */
+const RECORDED_DAY = "2026-10-13";
+
 export function Replay({ days }: { days: DayEntry[] }) {
-  const [date, setDate] = useState(() => days[Math.floor(days.length / 2)]?.date ?? "");
+  const [date, setDate] = useState(
+    () =>
+      days.find((d) => d.date === RECORDED_DAY)?.date ??
+      days[Math.floor(days.length / 2)]?.date ??
+      "",
+  );
   const [method, setMethod] = useState("localized conformal");
   const [forecast, setForecast] = useState<Forecast | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -22,7 +32,10 @@ export function Replay({ days }: { days: DayEntry[] }) {
     if (!date) return;
     let live = true;
     setBusy(true);
-    load<Forecast>(`/api/forecast?date=${date}`).then((result) => {
+    load<Forecast>(
+      `api/forecast?date=${date}`,
+      date === RECORDED_DAY ? "forecast.json" : undefined,
+    ).then((result) => {
       if (!live) return;
       setBusy(false);
       if (result.state === "ready") {

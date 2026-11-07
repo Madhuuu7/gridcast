@@ -1,3 +1,5 @@
+import { detect, read } from "./source";
+
 /* The service's shapes, and a fetch that distinguishes kinds of absence.
  *
  * Three things can be missing here and they mean different things: the
@@ -124,9 +126,22 @@ export type Resolved<T> =
 
 export type Loaded<T> = { state: "loading" } | Resolved<T>;
 
-export async function load<T>(path: string): Promise<Resolved<T>> {
+/** Paths are relative: a project site is served from /<repo>/, and a
+ *  leading slash would send every request to the domain root. */
+export async function load<T>(
+  path: string,
+  recorded?: string,
+): Promise<Resolved<T>> {
   try {
-    const response = await fetch(path, { headers: { accept: "application/json" } });
+    if (recorded) {
+      const where = await detect();
+      if (where === "recorded") {
+        return { state: "ready", value: await read<T>(path, recorded) };
+      }
+    }
+    const response = await fetch(path, {
+      headers: { accept: "application/json" },
+    });
     if (response.status === 404) {
       return { state: "absent", reason: "not-built" };
     }

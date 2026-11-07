@@ -1,0 +1,81 @@
+# Publish the desk as a static page.
+#
+# Served by the forecasting service the desk reads a live model and a live
+# ledger. Published here there is neither, so it reads recordings from
+# web/public/demo and says so on the page.
+#
+# What survives that honestly differs by view, and the banner distinguishes
+# them. The study is a deterministic backtest -- fixed folds, a seeded
+# model, the same out-of-sample blocks -- so a recording is the result. The
+# ledger is the view that cannot be faithfully frozen, because its whole
+# claim is that it grows a row a day and cannot be edited, so it is
+# presented as the snapshot it is.
+#
+# The recordings are committed rather than regenerated here. The backtest
+# needs three years of cached SLDC readings and about twenty minutes of
+# CPU, which is not something to re-pull from a public government server on
+# every push.
+
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm test
+        working-directory: web
+
+      - name: Check the recordings are present
+        # A published page whose fetches all 404 looks like a broken
+        # deploy rather than a missing file, so fail here where the
+        # message is readable.
+        run: |
+          for f in health summary days schedule record backtest forecast \
+                   record-replay; do
+            test -s "web/public/demo/$f.json" \
+              || { echo "::error::web/public/demo/$f.json is missing"; exit 1; }
+          done
+
+      - name: Build
+        # A project site lives at /<repo>/, so assets and every fetch are
+        # relative.
+        run: npm run build -- --base=./
+        working-directory: web
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

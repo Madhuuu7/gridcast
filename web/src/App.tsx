@@ -8,6 +8,7 @@ import {
   type RecordBody,
   type Schedule,
 } from "./lib/api";
+import { detect, type Mode } from "./lib/source";
 import { Record as RecordView } from "./views/Record";
 import { Replay } from "./views/Replay";
 import { Study } from "./views/Study";
@@ -53,6 +54,7 @@ function useTheme() {
 
 export default function App() {
   const [view, setView] = useState<View>("declaration");
+  const [mode, setMode] = useState<Mode | null>(null);
   const [theme, toggleTheme] = useTheme();
   const [health, setHealth] = useState<Loaded<Health>>({ state: "loading" });
   const [schedule, setSchedule] = useState<Loaded<Schedule>>({ state: "loading" });
@@ -61,11 +63,12 @@ export default function App() {
   const [backtest, setBacktest] = useState<Loaded<Backtest>>({ state: "loading" });
 
   useEffect(() => {
-    load<Health>("/api/health").then(setHealth);
-    load<Schedule>("/api/schedule").then(setSchedule);
-    load<RecordBody>("/api/record").then(setRecord);
-    load<DayEntry[]>("/api/days").then(setDays);
-    load<Backtest>("/api/backtest").then(setBacktest);
+    void detect().then(setMode);
+    load<Health>("api/health", "health.json").then(setHealth);
+    load<Schedule>("api/schedule", "schedule.json").then(setSchedule);
+    load<RecordBody>("api/record", "record.json").then(setRecord);
+    load<DayEntry[]>("api/days", "days.json").then(setDays);
+    load<Backtest>("api/backtest", "backtest.json").then(setBacktest);
   }, []);
 
   const servable =
@@ -105,6 +108,21 @@ export default function App() {
           </button>
         ))}
       </nav>
+
+      {mode === "recorded" && (
+        <div className="state" style={{ marginBottom: 24 }}>
+          <p style={{ margin: 0 }}>
+            <strong>No service behind this page.</strong> The study is a
+            deterministic backtest — fixed folds, the same 32,391
+            out-of-sample blocks — so what you see is the result, not a
+            picture of one, and a replayed day is exactly what the service
+            computes for that date. The ledger is a snapshot: its whole
+            point is that it grows a row a day and cannot be edited, which
+            a static page cannot show you happening. Run{" "}
+            <code>uvicorn gridcast.api.app:app</code> for the live one.
+          </p>
+        </div>
+      )}
 
       {health.state === "ready" && health.value.status !== "ok" && (
         <div className="state error">
