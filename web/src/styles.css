@@ -13,9 +13,11 @@
  * Everything else is paper and rule.
  *
  * Dark mode is not this page with the lights off -- it is the blueprint of
- * the same document: pale rose ink on deep navy stock. A notice and its
- * blueprint are the same drawing, which is the only honest way a form has a
- * dark mode at all.
+ * the same document: cyanotype blue on deep navy stock, which is what a
+ * blueprint has always been. Rose survives the inversion and keeps its one
+ * job, so a missed block still reads as a missed block in either theme. A
+ * notice and its blueprint are the same drawing, which is the only honest
+ * way a form has a dark mode at all.
  */
 
 /* Fonts are served from this origin, not from a font host.
@@ -99,9 +101,9 @@
     --paper-raised: #1b3a4b;
     --tint: #1f4256;
 
-    --ink: #f8d6d9;
-    --ink-soft: #e0b9be;
-    --ink-faint: #baa6aa;
+    --ink: #afcadc;
+    --ink-soft: #9cbed4;
+    --ink-faint: #84aec9;
     --rule: #3c6479;
     --rule-faint: #27485c;
 
@@ -118,9 +120,9 @@
   --paper-raised: #1b3a4b;
   --tint: #1f4256;
 
-  --ink: #f8d6d9;
-  --ink-soft: #e0b9be;
-  --ink-faint: #baa6aa;
+  --ink: #afcadc;
+  --ink-soft: #9cbed4;
+  --ink-faint: #84aec9;
   --rule: #3c6479;
   --rule-faint: #27485c;
 
