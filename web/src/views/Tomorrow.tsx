@@ -40,6 +40,13 @@ export function Tomorrow({ schedule }: { schedule: Schedule }) {
   return (
     <section>
       <div className="declaration">
+        {/* The stamp is the whole argument of this project in four words:
+         * the forecast was written before the day began, and the store
+         * refuses to let it be edited afterwards. */}
+        <p className="stamp" aria-label={`Issued ${issuedAt(schedule.issued_at)} IST and cannot be revised`}>
+          issued {issuedAt(schedule.issued_at)} IST
+          <b>cannot be revised</b>
+        </p>
         <div>
           <h2 className="target">
             {longDate(schedule.target_date)}

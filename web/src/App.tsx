@@ -85,6 +85,10 @@ export default function App() {
           fifteen-minute settlement blocks, with intervals whose coverage is
           measured rather than assumed.
         </p>
+        <p className="docket">
+          Form SLDC-96 &#183; day-ahead schedule &#183; Delhi &#183; 15-minute
+          settlement blocks
+        </p>
         <div className="masthead-right">
           {servable && <span className="fig">serving {servable}</span>}
           <button

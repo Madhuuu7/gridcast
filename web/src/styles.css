@@ -1,24 +1,44 @@
-/* gridcast console — a day-ahead scheduling desk.
+/* gridcast console — a day-ahead dispatch notice.
  *
- * The page is ink on cool drawing stock. Colour appears in exactly two
- * places and means something in both: the schedule strip runs a cool-to-warm
- * ramp across the day because the load it forecasts is air conditioning, and
- * vermilion marks a block the interval missed. Nothing else is coloured,
- * which is what lets the strip carry the page.
+ * The page is built as the document it describes. A load despatch centre
+ * declares tomorrow's schedule on a form, before the day begins, and cannot
+ * revise it afterwards; so this is a form. It has a letterhead with a
+ * reference, a ruled sheet, fields with dotted leaders, boxed figures, and a
+ * stamp across the declaration saying when it was issued and that it cannot
+ * be taken back. The schedule strip is drawn on the sheet the way a chart
+ * recorder would draw it.
+ *
+ * Navy is the ink. Rose is the only other colour and it means one thing: a
+ * block the interval missed, or the evening peak the day is really about.
+ * Everything else is paper and rule.
+ *
+ * Dark mode is not this page with the lights off -- it is the blueprint of
+ * the same document: pale rose ink on deep navy stock. A notice and its
+ * blueprint are the same drawing, which is the only honest way a form has a
+ * dark mode at all.
  */
 
 /* Fonts are served from this origin, not from a font host.
  *
- * The page it replaced was deliberately self-contained, and that was not an
- * aesthetic choice: the demo has to render on a free instance that has just
- * woken from sleep, and behind whatever network the person looking at it is
- * on. A font-host round trip on a cold start is the slowest thing on the
- * page, and offline it is a page in the wrong typeface. 64 kB of latin
- * subsets, served beside the bundle, costs less than the round trip.
+ * The demo has to render on a free instance that has just woken from sleep,
+ * and behind whatever network the person looking at it is on. A font-host
+ * round trip on a cold start is the slowest thing on the page, and offline
+ * it is a page in the wrong typeface. Latin subsets only, served beside the
+ * bundle, which costs less than the round trip.
  *
- * Archivo ships as one variable file covering every weight here -- the four
- * weights Google serves are byte-identical, so three of them were deleted.
+ * Playfair Display carries the document's voice: it is a transitional face
+ * with the high contrast of printed stationery, which is what a notice from
+ * a utility has always been set in. Archivo does the work of the form, and
+ * Plex Mono holds the figure columns.
  */
+@font-face {
+  font-family: "Playfair Display";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/playfair-display-variable.woff2") format("woff2");
+}
+
 @font-face {
   font-family: "Archivo";
   font-style: normal;
@@ -44,55 +64,70 @@
 }
 
 :root {
-  --paper: #edeff2;
-  --paper-raised: #f6f7f9;
-  --ink: #141a2e;
-  --ink-soft: #46506b;
-  --ink-faint: #78819a;
-  --rule: #c3c9d4;
-  --rule-faint: #dbdfe6;
+  --desk: #f3e3e5;
+  --paper: #fdf8f8;
+  --paper-raised: #fbf1f2;
+  --tint: #f8d6d9;
 
-  /* The strip's ramp: a Delhi night against a Delhi evening. */
-  --cool: #3e6e8e;
-  --hot: #e09b2d;
-  --miss: #b5123e;
-  --band: #8ea7bb;
+  --ink: #1b4157;
+  --ink-soft: #2a5b7f;
+  --ink-faint: #4b6677;
+  --rule: #afcadc;
+  --rule-faint: #e3edf3;
+
+  /* The strip's ramp: a Delhi night against a Delhi evening. Rose is the
+   * evening, when the air conditioning is on and the peak is paid for. */
+  --cool: #2a5b7f;
+  --hot: #d4798a;
+  --miss: #a8405a;
+  --band: #afcadc;
 
   --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
   --sans: "Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --display: "Playfair Display", Georgia, "Times New Roman", serif;
 
   --gutter: 16px;
   --measure: 68ch;
+  --sheet-pad: clamp(18px, 3.4vw, 44px);
 }
 
+/* The blueprint. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #12151c;
-    --paper-raised: #181c25;
-    --ink: #e6e9ef;
-    --ink-soft: #a4acbe;
-    --ink-faint: #717a8e;
-    --rule: #2d3340;
-    --rule-faint: #22272f;
-    --cool: #6fa3c4;
-    --hot: #f2b451;
-    --miss: #ff5d7d;
-    --band: #5b7489;
+    --desk: #0e212d;
+    --paper: #16303f;
+    --paper-raised: #1b3a4b;
+    --tint: #1f4256;
+
+    --ink: #f8d6d9;
+    --ink-soft: #e0b9be;
+    --ink-faint: #baa6aa;
+    --rule: #3c6479;
+    --rule-faint: #27485c;
+
+    --cool: #afcadc;
+    --hot: #e39fa9;
+    --miss: #f08ba0;
+    --band: #35607a;
   }
 }
 
 :root[data-theme="dark"] {
-  --paper: #12151c;
-  --paper-raised: #181c25;
-  --ink: #e6e9ef;
-  --ink-soft: #a4acbe;
-  --ink-faint: #717a8e;
-  --rule: #2d3340;
-  --rule-faint: #22272f;
-  --cool: #6fa3c4;
-  --hot: #f2b451;
-  --miss: #ff5d7d;
-  --band: #5b7489;
+  --desk: #0e212d;
+  --paper: #16303f;
+  --paper-raised: #1b3a4b;
+  --tint: #1f4256;
+
+  --ink: #f8d6d9;
+  --ink-soft: #e0b9be;
+  --ink-faint: #baa6aa;
+  --rule: #3c6479;
+  --rule-faint: #27485c;
+
+  --cool: #afcadc;
+  --hot: #e39fa9;
+  --miss: #f08ba0;
+  --band: #35607a;
 }
 
 * {
@@ -105,7 +140,7 @@ html {
 
 body {
   margin: 0;
-  background: var(--paper);
+  background: var(--desk);
   color: var(--ink);
   font-family: var(--sans);
   font-size: 16px;
@@ -127,32 +162,52 @@ a {
 }
 
 :focus-visible {
-  outline: 2px solid var(--cool);
+  outline: 2px solid var(--ink-soft);
   outline-offset: 3px;
 }
 
-/* -- shell ---------------------------------------------------------- */
+/* -- the sheet ------------------------------------------------------ */
 
+/* The page is a sheet of stock lying on a desk, ruled the way a form is
+ * ruled. The rules are drawn, not decorative: they are 28px apart, which is
+ * the line height the figures and table rows sit on. */
 .shell {
   max-width: 1120px;
-  margin: 0 auto;
-  padding: 0 var(--gutter) 96px;
+  margin: 0 auto 72px;
+  padding: 0 var(--sheet-pad) 64px;
+  background-color: var(--paper);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--rule-faint) 0,
+    var(--rule-faint) 1px,
+    transparent 1px,
+    transparent 28px
+  );
+  background-position: 0 120px;
+  border: 1px solid var(--rule);
+  border-top: 0;
+  box-shadow: 0 1px 0 rgba(27, 65, 87, 0.04), 0 18px 48px -32px rgba(27, 65, 87, 0.5);
 }
+
+/* -- letterhead ----------------------------------------------------- */
 
 .masthead {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px 20px;
-  padding: 28px 0 14px;
-  border-bottom: 1.5px solid var(--ink);
+  gap: 8px 24px;
+  margin: 0 calc(var(--sheet-pad) * -1) 0;
+  padding: 26px var(--sheet-pad) 16px;
+  background: var(--tint);
+  border-bottom: 3px double var(--ink);
 }
 
 .wordmark {
   margin: 0;
-  font-size: clamp(26px, 4.6vw, 36px);
+  font-family: var(--display);
+  font-size: clamp(32px, 5.4vw, 46px);
   font-weight: 700;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.015em;
   line-height: 1;
 }
 
@@ -160,7 +215,7 @@ a {
   margin: 0;
   color: var(--ink-soft);
   font-size: 14.5px;
-  max-width: 54ch;
+  max-width: 50ch;
 }
 
 .masthead-right {
@@ -169,28 +224,46 @@ a {
   align-items: baseline;
   gap: 16px;
   font-size: 13px;
+  color: var(--ink-soft);
+}
+
+/* The reference line every official form carries in its corner. */
+.docket {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
   color: var(--ink-faint);
 }
 
 .theme-toggle {
   background: none;
-  border: 1px solid var(--rule);
+  border: 1px solid var(--ink-soft);
   color: var(--ink-soft);
-  font: inherit;
-  font-size: 12.5px;
-  padding: 3px 10px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 11px;
   cursor: pointer;
 }
 
 .theme-toggle:hover {
-  border-color: var(--ink-soft);
-  color: var(--ink);
+  background: var(--ink-soft);
+  color: var(--paper);
 }
 
+/* -- the tabs ------------------------------------------------------- */
+
+/* File tabs on a docket: the open one is cut out of the sheet, so it has
+ * no bottom edge and the others do. */
 nav.views {
   display: flex;
-  gap: 2px;
-  margin: 0 0 32px;
+  gap: 4px;
+  margin: 0 0 34px;
+  padding-top: 14px;
   border-bottom: 1px solid var(--rule);
   overflow-x: auto;
   scrollbar-width: none;
@@ -201,13 +274,13 @@ nav.views::-webkit-scrollbar {
 }
 
 nav.views button {
-  background: none;
-  border: 0;
-  border-bottom: 2px solid transparent;
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  border-bottom: 0;
   color: var(--ink-faint);
   font: inherit;
-  font-size: 14.5px;
-  padding: 11px 16px 9px;
+  font-size: 14px;
+  padding: 8px 17px 7px;
   cursor: pointer;
   white-space: nowrap;
   margin-bottom: -1px;
@@ -218,9 +291,11 @@ nav.views button:hover {
 }
 
 nav.views button[aria-current="true"] {
+  background: var(--paper);
   color: var(--ink);
   font-weight: 600;
-  border-bottom-color: var(--ink);
+  border-color: var(--rule);
+  box-shadow: 0 1px 0 0 var(--paper);
 }
 
 /* -- sections ------------------------------------------------------- */
@@ -235,9 +310,10 @@ section:last-of-type {
 
 h2 {
   margin: 0 0 4px;
-  font-size: 21px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
+  font-family: var(--display);
+  font-size: 25px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 h3 {
@@ -260,7 +336,8 @@ h3 {
   margin: 14px 0 0;
 }
 
-.note code {
+.note code,
+.state code {
   font-family: var(--mono);
   font-size: 13px;
   background: var(--paper-raised);
@@ -268,68 +345,149 @@ h3 {
   border: 1px solid var(--rule-faint);
 }
 
-/* -- the declaration header ----------------------------------------- */
+/* -- the declaration ------------------------------------------------ */
 
+/* The notice proper: the date it is about, the fields it was issued under,
+ * and the stamp that says it is final. */
+/* A grid rather than a flex row, so the stamp has a row of its own. Floated
+   over the fields it covered the first one, and a stamp that hides the issue
+   time is a poor joke on a form whose whole subject is the issue time. */
 .declaration {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px 28px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--rule);
-  margin-bottom: 22px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 10px 28px;
+  padding: 18px 22px 16px;
+  border: 1px solid var(--rule);
+  background: var(--paper-raised);
+  margin-bottom: 26px;
+}
+
+.declaration > :nth-child(2) {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.declaration dl {
+  grid-column: 2;
+  grid-row: 2;
 }
 
 .declaration .target {
   margin: 0;
-  font-size: clamp(28px, 5.4vw, 44px);
-  font-weight: 600;
-  letter-spacing: -0.03em;
-  line-height: 1.04;
+  font-family: var(--display);
+  font-size: clamp(30px, 5.6vw, 48px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.02;
 }
 
 .declaration .kind {
   display: block;
-  font-size: 15px;
-  font-weight: 500;
-  color: var(--hot);
-  letter-spacing: 0;
-  margin-top: 4px;
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--miss);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-top: 6px;
 }
 
+/* Fields with dotted leaders, the way a form prints them. */
 .declaration dl {
   margin: 0;
   display: grid;
   grid-template-columns: auto auto;
-  gap: 2px 14px;
-  font-size: 13.5px;
+  gap: 3px 14px;
+  font-size: 13px;
   align-content: end;
 }
 
 .declaration dt {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
   color: var(--ink-faint);
+  border-bottom: 1px dotted var(--rule);
+  align-self: end;
+  padding-bottom: 2px;
 }
 
 .declaration dd {
   margin: 0;
   font-family: var(--mono);
   font-size: 13px;
+  border-bottom: 1px solid var(--rule-faint);
+  padding-bottom: 2px;
 }
 
-/* -- figures row ---------------------------------------------------- */
+/* The stamp. Rotated, double-ruled, and deliberately a little off the
+ * grid, because a stamp is pressed by hand onto a form that was printed. */
+.stamp {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  transform: rotate(-7deg);
+  margin: 2px 6px 8px 0;
+  padding: 5px 13px 4px;
+  border: 2px solid var(--miss);
+  outline: 1px solid var(--miss);
+  outline-offset: 2px;
+  color: var(--miss);
+  background: var(--paper);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.35;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  text-align: center;
+  opacity: 0.88;
+  pointer-events: none;
+}
 
+.stamp b {
+  display: block;
+  font-weight: 700;
+  font-size: 11.5px;
+}
+
+@media (max-width: 720px) {
+  .declaration {
+    grid-template-columns: 1fr;
+  }
+  .declaration > :nth-child(2),
+  .declaration dl {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .stamp {
+    grid-column: 1;
+    justify-self: start;
+    transform: rotate(-3deg);
+    margin: 0 0 10px;
+  }
+}
+
+/* -- figures -------------------------------------------------------- */
+
+/* Boxes on a form, not cards: a hairline grid with the caption printed
+ * above the value the way a field label is. */
 .figures {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
   gap: 0;
-  border-top: 1px solid var(--rule);
-  border-bottom: 1px solid var(--rule);
+  border: 1px solid var(--rule);
+  background: var(--paper);
 }
 
 .figures > div {
-  padding: 13px 18px 13px 0;
+  padding: 12px 16px 13px;
   border-right: 1px solid var(--rule-faint);
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  gap: 1px;
 }
 
 .figures > div:last-child {
@@ -347,9 +505,13 @@ h3 {
 
 .figures .caption {
   display: block;
-  font-size: 13px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   color: var(--ink-faint);
-  margin-top: 2px;
+  order: 3;
+  margin-bottom: 5px;
 }
 
 .figures .sub {
@@ -357,6 +519,8 @@ h3 {
   font-size: 12.5px;
   color: var(--ink-faint);
   font-family: var(--mono);
+  order: -1;
+  margin-top: 2px;
 }
 
 /* -- the strip ------------------------------------------------------ */
@@ -364,6 +528,9 @@ h3 {
 .strip-frame {
   position: relative;
   margin: 26px 0 0;
+  padding: 16px 14px 10px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
 }
 
 .strip-scroll {
@@ -390,13 +557,14 @@ svg.strip {
 }
 
 .strip .axis-rule {
-  stroke: var(--rule);
+  stroke: var(--ink-soft);
   stroke-width: 1;
 }
 
 .strip .grid-rule {
-  stroke: var(--rule-faint);
+  stroke: var(--rule);
   stroke-width: 1;
+  stroke-dasharray: 2 4;
 }
 
 .strip .band {
@@ -448,7 +616,7 @@ svg.strip {
   gap: 6px 20px;
   margin-top: 10px;
   font-size: 13px;
-  color: var(--ink-faint);
+  color: var(--ink-soft);
 }
 
 .legend span {
@@ -483,11 +651,14 @@ table {
 
 thead th {
   text-align: left;
-  font-weight: 600;
-  font-size: 13px;
+  font-family: var(--mono);
+  font-weight: 500;
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   color: var(--ink-soft);
   padding: 0 14px 7px 0;
-  border-bottom: 1.5px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
   white-space: nowrap;
 }
 
@@ -513,7 +684,7 @@ tbody td:first-child {
 }
 
 tbody tr:hover td {
-  background: var(--paper-raised);
+  background: var(--tint);
 }
 
 .best td {
@@ -525,8 +696,8 @@ tbody tr:hover td {
  * in ordinary ink -- in red it read as a wall of failures rather than as
  * the result the section is reporting. */
 .verdict-noise {
-  color: var(--cool);
-  font-weight: 600;
+  color: var(--ink-soft);
+  font-weight: 700;
 }
 
 .verdict-uneven {
@@ -555,7 +726,10 @@ tbody tr:hover td {
 }
 
 .field > span {
-  font-size: 13px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   color: var(--ink-faint);
 }
 
@@ -576,9 +750,11 @@ select:hover {
 
 /* -- states --------------------------------------------------------- */
 
+/* A note clipped to the form. */
 .state {
-  border-left: 2px solid var(--rule);
-  padding: 2px 0 2px 16px;
+  border-left: 3px solid var(--rule);
+  background: var(--paper-raised);
+  padding: 12px 16px;
   color: var(--ink-soft);
   max-width: var(--measure);
   font-size: 14.5px;
@@ -592,11 +768,6 @@ select:hover {
   color: var(--ink);
 }
 
-.state code {
-  font-family: var(--mono);
-  font-size: 13px;
-}
-
 footer {
   border-top: 1px solid var(--rule);
   padding-top: 18px;
@@ -607,10 +778,16 @@ footer {
 
 @media (max-width: 720px) {
   .figures > div {
-    padding-right: 12px;
+    padding: 11px 12px 12px;
+  }
+  .declaration {
+    padding: 16px 14px 14px;
   }
   .declaration dl {
     font-size: 12.5px;
+  }
+  .shell {
+    background-image: none;
   }
 }
 
