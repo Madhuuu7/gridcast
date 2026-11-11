@@ -20,8 +20,17 @@ calibration data covers, and still none that it does not.
 And the whole study has the weakness every backtest has — the folds, the
 features and the methods were all chosen by someone who already knew how the
 story ended. So the system also **declares a schedule for tomorrow every day
-and cannot edit it afterwards**. That ledger is the only measurement here that
-nobody arranged.
+and cannot edit it afterwards**: a workflow runs at the gate, and the store
+refuses anything that arrives after the day it is about has begun. That ledger
+is the only measurement here that nobody arranged.
+
+**It is paused, and the published ledger is a snapshot.** The free Postgres it
+wrote to has expired, so there is nowhere durable to record a declaration; the
+workflow now skips each morning with a warning rather than pretending
+otherwise, and resumes on its own when `DATABASE_URL` points at a database
+again. The rows on the site are the ones it managed to write, dated on the
+page. Everything else here — the backtest, the coverage, the replay — is
+reproducible from this repository and does not depend on that.
 
 ---
 

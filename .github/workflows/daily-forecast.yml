@@ -68,34 +68,48 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Check the database is configured
+      - name: Is there a database to write to?
+        # A warning and a clean stop, not a failure. Without somewhere
+        # durable to write, the forecast would go to a container that is
+        # about to be destroyed, so there is nothing useful to do -- but a
+        # job that fails every morning for a reason nobody is going to fix
+        # today teaches you to ignore the one morning it fails for a
+        # different reason. The moment DATABASE_URL exists this resumes on
+        # its own, with no edit here.
+        id: database
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo "::error::DATABASE_URL is not set. Add it as a repository"
-            echo "::error::secret pointing at the deployed Postgres, or the"
-            echo "::error::forecast is written to a container that is about"
-            echo "::error::to be destroyed."
-            exit 1
+            echo "::warning::DATABASE_URL is not set, so no schedule was"
+            echo "::warning::issued today and the ledger has a gap for it."
+            echo "::warning::Add it as a repository secret pointing at a"
+            echo "::warning::Postgres and the next run writes again."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Top up the load archive
+        if: steps.database.outputs.ready == 'true'
         # Eighteen months is enough to fit and calibrate. A cold cache pays
         # for this once; after that it fetches only the new days.
         run: python scripts/fetch_data.py --years 1.5 --workers 3
 
       - name: Migrate
+        if: steps.database.outputs.ready == 'true'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: alembic upgrade head
 
       - name: Record what the grid actually drew
+        if: steps.database.outputs.ready == 'true'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python scripts/issue_forecast.py --observe
 
       - name: Declare tomorrow
+        if: steps.database.outputs.ready == 'true'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
@@ -104,7 +118,7 @@ jobs:
             ${{ inputs.reissue && '--reissue' || '' }}
 
       - name: Show the record
-        if: always()
+        if: always() && steps.database.outputs.ready == 'true'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python scripts/issue_forecast.py --scorecard
