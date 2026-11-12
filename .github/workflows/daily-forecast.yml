@@ -45,9 +45,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -56,7 +56,7 @@ jobs:
         # daily run fetches the handful of days it is missing instead of
         # re-pulling three years from a public government server every
         # morning. The key rolls monthly so the cache cannot grow forever.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: data/raw
           key: sldc-${{ github.run_id }}
